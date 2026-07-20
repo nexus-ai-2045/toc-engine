@@ -2,6 +2,7 @@
 config.local.toml
 goal.toml
 .toc/
+docs/superpowers/
 
 # Python
 __pycache__/
