@@ -7,6 +7,7 @@ from toc_engine.metrics import StageMetrics
 
 _AGE_WEIGHT_DAYS = 7.0   # 滞留 1 週間ごとに重み +1
 _GROWTH_FACTOR = 1.5     # WIP 増加傾向の重み
+GROWTH_WINDOW = 3        # 成長判定に使う直近 snapshot 数
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,13 @@ class ConstraintCandidate:
     stage_name: str
     score: float
     evidence: tuple[str, ...]
+
+
+def wip_growth(hist: list[int]) -> tuple[int, int] | None:
+    """直近ウィンドウで WIP が増えていれば (起点, 現在) を返す。それ以外は None。"""
+    if len(hist) >= GROWTH_WINDOW and hist[-1] > hist[-GROWTH_WINDOW]:
+        return hist[-GROWTH_WINDOW], hist[-1]
+    return None
 
 
 def rank(
@@ -38,9 +46,10 @@ def rank(
             evidence.append(f"平均滞留 {m.avg_age_days:.1f} 日")
         growth_factor = 1.0
         hist = (wip_history or {}).get(m.stage.name, [])
-        if len(hist) >= 2 and hist[-1] > hist[0]:
+        growth = wip_growth(hist)
+        if growth is not None:
             growth_factor = _GROWTH_FACTOR
-            evidence.append(f"WIP 増加傾向 ({hist[0]} → {hist[-1]})")
+            evidence.append(f"WIP 増加傾向 ({growth[0]} → {growth[1]})")
         score = round(m.wip * age_factor * growth_factor, 2)
         candidates.append(
             ConstraintCandidate(m.stage.name, score, tuple(evidence))

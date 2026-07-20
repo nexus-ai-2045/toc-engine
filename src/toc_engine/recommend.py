@@ -3,11 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from toc_engine.constraint import ConstraintCandidate
+from toc_engine.constraint import ConstraintCandidate, GROWTH_WINDOW, wip_growth
 from toc_engine.metrics import StageMetrics
 
 EXPLOIT_AGE_DAYS = 14.0  # これ以上滞留したら Exploit を疑う
-_GROWTH_WINDOW = 3       # WIP 増加判定に使う直近 snapshot 数
 
 
 @dataclass(frozen=True)
@@ -50,13 +49,14 @@ def recommend(
 
     # if: 制約の WIP が増え続けている → then: Subordinate（上流を絞る）
     hist = (wip_history or {}).get(top.stage_name, [])
-    if len(hist) >= _GROWTH_WINDOW and hist[-1] > hist[-_GROWTH_WINDOW]:
+    growth = wip_growth(hist)
+    if growth is not None:
         recs.append(
             Recommendation(
                 "subordinate",
                 f"制約 '{top.stage_name}' の WIP が増え続けています。"
                 "上流の投入を制約の処理ペースに絞ってください (Subordinate)。",
-                (f"WIP 推移: {hist[-_GROWTH_WINDOW:]}",),
+                (f"WIP 推移: {hist[-GROWTH_WINDOW:]}",),
             )
         )
 

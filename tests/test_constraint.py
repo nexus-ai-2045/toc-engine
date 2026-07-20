@@ -43,3 +43,11 @@ def test_rank_growth_factor_from_history():
     # 同 WIP でも増加傾向のある方が上位
     assert result[0].stage_name == "a:inbox"
     assert any("増加傾向" in e for e in result[0].evidence)
+
+
+def test_rank_growth_uses_recent_window_not_first_snapshot():
+    # 昔増えて最近は横ばい/減少なら成長扱いしない
+    metrics = [_m("a:inbox", wip=4)]
+    history = {"a:inbox": [0, 5, 5, 4]}  # hist[-3]=5, hist[-1]=4 → 成長なし
+    result = rank(metrics, wip_history=history)
+    assert not any("増加傾向" in e for e in result[0].evidence)
