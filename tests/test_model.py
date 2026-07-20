@@ -40,3 +40,11 @@ def test_load_goal_missing_raises(tmp_path):
     # Goal 未定義なら GoalNotDefinedError（toc init へ誘導するメッセージ付き）
     with pytest.raises(GoalNotDefinedError, match="toc init"):
         load_goal(tmp_path / "goal.toml")
+
+
+def test_goal_statement_with_newline_roundtrip(tmp_path):
+    # 改行・タブを含む Goal 文もエスケープされて往復する
+    goal = Goal(statement="1行目\n2行目\tタブ", throughput_unit="件")
+    path = tmp_path / "goal.toml"
+    save_goal(goal, path)
+    assert load_goal(path).statement == "1行目\n2行目\tタブ"

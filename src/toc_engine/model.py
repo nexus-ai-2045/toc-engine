@@ -62,7 +62,12 @@ class Note:
 
 def _toml_str(value: str) -> str:
     """最小限の TOML 文字列エスケープ（flat な goal schema 専用）。"""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    escaped = (value
+        .replace("\\", "\\\\")  # バックスラッシュを最初にエスケープ
+        .replace("\n", "\\n")   # 改行をエスケープ
+        .replace("\r", "\\r")   # キャリッジリターンをエスケープ
+        .replace("\t", "\\t")   # タブをエスケープ
+        .replace('"', '\\"'))   # ダブルクォートをエスケープ
     return f'"{escaped}"'
 
 
