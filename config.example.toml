@@ -1,0 +1,24 @@
+# toc-engine 設定サンプル。
+# 実運用ではこのファイルを config.local.toml にコピーして実パスを書く。
+# config.local.toml は gitignore 済み（個人パスをコミットしない）。
+
+[core]
+state_dir = ".toc"        # goal.toml / history.jsonl / レポート出力先
+max_interval_days = 3     # 何も起きなくてもこの日数でレビュー推奨（可変）
+
+# ディレクトリ型パイプライン: ファイルの移動 = 工程の進行
+[[source]]
+type = "dir_pipeline"
+name = "articles"
+stages = [
+  { name = "inbox", path = "content/inbox" },
+  { name = "drafts", path = "content/drafts" },
+  { name = "ready", path = "content/ready" },
+  { name = "published", path = "published", terminal = true },
+]
+
+# Markdown タスクリスト: - [ ] が open、- [x] が done
+[[source]]
+type = "md_tasks"
+name = "todo"
+path = "tasks/todo.md"
