@@ -35,7 +35,17 @@ def recommend(
         ]
     top = candidates[0]
     by_name = {m.stage.name: m for m in metrics}
-    m = by_name[top.stage_name]
+    m = by_name.get(top.stage_name)
+    if m is None:
+        # 候補と metrics の不整合は identify に落として黙殺しない
+        return [
+            Recommendation(
+                "identify",
+                f"制約候補 '{top.stage_name}' のメトリクスが見つかりません。"
+                "入力データの整合を確認してください。",
+                top.evidence,
+            )
+        ]
     recs: list[Recommendation] = []
 
     # if: 制約の WIP が増え続けている → then: Subordinate（上流を絞る）

@@ -53,3 +53,10 @@ def test_no_candidates_returns_identify_guidance():
     recs = recommend([], [])
     assert recs[0].step == "identify"
     assert "データソース" in recs[0].text
+
+
+def test_candidate_without_metrics_degrades_to_identify():
+    # 候補と metrics が不整合でも KeyError にせず identify に落とす
+    recs = recommend([_top("ghost:stage")], [_metrics("a:inbox")])
+    assert [r.step for r in recs] == ["identify"]
+    assert "整合" in recs[0].text
