@@ -5,6 +5,7 @@ import html as html_mod
 from datetime import datetime
 
 _W, _H = 640, 240  # CFD 描画領域
+_MIN_SPAN_DAYS = 2.0  # これ未満の計測スパンではレートを外挿しない
 _PALETTE = ["#4e79a7", "#f28e2b", "#76b7b2", "#e15759", "#59a14f",
             "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac"]
 
@@ -53,7 +54,10 @@ def _health_badge(target_per_week: float, throughput: list[tuple[str, int]]) -> 
         return "<span class='health-badge zone-yellow'>データ不足</span>"
     t0 = datetime.fromisoformat(throughput[0][0])
     t1 = datetime.fromisoformat(throughput[-1][0])
-    weeks = max((t1 - t0).total_seconds() / (7 * 86400), 1e-9)
+    span_days = (t1 - t0).total_seconds() / 86400
+    if span_days < _MIN_SPAN_DAYS:
+        return "<span class='health-badge zone-yellow'>計測期間が短い</span>"
+    weeks = max(span_days / 7, 1e-9)
     rate = (throughput[-1][1] - throughput[0][1]) / weeks
     if rate >= target_per_week:
         zone, label = "zone-green", "順調"

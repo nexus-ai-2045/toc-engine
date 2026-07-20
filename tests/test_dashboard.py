@@ -53,3 +53,11 @@ def test_health_badge_only_with_target():
     no_target["goal"] = dict(_REPORT["goal"], target_per_week=None)
     assert "health-badge" in render_html(_REPORT, _CFD, _THROUGHPUT)
     assert "health-badge" not in render_html(no_target, _CFD, _THROUGHPUT)
+
+
+def test_health_badge_short_window_shows_no_rate():
+    # 数分間隔の snapshot ではレート外挿せず「計測期間が短い」を出す
+    short = [("2026-07-20T10:00:00+00:00", 1), ("2026-07-20T10:05:00+00:00", 3)]
+    html_text = render_html(_REPORT, _CFD, short)
+    assert "計測期間が短い" in html_text
+    assert "順調" not in html_text
