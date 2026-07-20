@@ -1,0 +1,11 @@
+# 個人データ・ローカル状態（公開境界）
+config.local.toml
+goal.toml
+.toc/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
