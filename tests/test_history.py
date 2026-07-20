@@ -50,3 +50,12 @@ def test_broken_line_is_skipped_with_warning(tmp_path, caplog):
 
 def test_read_missing_file_returns_empty(tmp_path):
     assert read_history(tmp_path / "none.jsonl") == ([], [])
+
+
+def test_unknown_type_is_skipped_with_warning(tmp_path, caplog):
+    path = tmp_path / "history.jsonl"
+    path.write_text('{"type": "mystery", "at": "2026-07-20T00:00:00+00:00"}\n', encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        snapshots, notes = read_history(path)
+    assert (snapshots, notes) == ([], [])
+    assert "mystery" in caplog.text

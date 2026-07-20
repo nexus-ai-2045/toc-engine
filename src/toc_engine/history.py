@@ -89,6 +89,10 @@ def read_history(path: Path) -> tuple[list[Snapshot], list[Note]]:
                         constraint=rec.get("constraint"),
                     )
                 )
+            else:
+                logger.warning(
+                    "history %d 行目: 未知の type %r をスキップ", lineno, rec["type"]
+                )
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
             logger.warning("history %d 行目を読めずスキップ: %s", lineno, e)
     return snapshots, notes
