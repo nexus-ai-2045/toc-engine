@@ -7,6 +7,7 @@ from pathlib import Path
 
 from toc_engine.adapters.base import Adapter
 from toc_engine.adapters.dir_pipeline import DirPipelineAdapter
+from toc_engine.adapters.json_ledger import JsonLedgerAdapter
 from toc_engine.adapters.md_tasks import MdTasksAdapter
 
 
@@ -48,6 +49,18 @@ def build_adapters(config: Config, base: Path) -> list[Adapter]:
             adapters.append(DirPipelineAdapter(src["name"], specs))
         elif kind == "md_tasks":
             adapters.append(MdTasksAdapter(src["name"], str(base / src["path"])))
+        elif kind == "json_ledger":
+            adapters.append(
+                JsonLedgerAdapter(
+                    src["name"],
+                    str(base / src["path"]),
+                    stage=src.get("stage", "done"),
+                    records_key=src.get("records_key", ""),
+                    id_field=src.get("id_field", "id"),
+                    title_field=src.get("title_field", "title"),
+                    timestamp_field=src.get("timestamp_field", "published_at"),
+                )
+            )
         else:
             raise ValueError(f"未知の source type: {kind}")
     return adapters

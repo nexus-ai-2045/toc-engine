@@ -22,3 +22,17 @@ stages = [
 type = "md_tasks"
 name = "todo"
 path = "tasks/todo.md"
+
+# JSON 台帳: 成果物の実体が外部 (公開 URL 等) にあり、ローカルには記録しかない場合。
+# 1 レコード = 完了済み成果物 1 件として terminal 工程に載る。
+# 注意: 出力先フォルダを Throughput の代わりに使うと、同期漏れで
+#       「出荷が止まった」ように見える。実際に公開を記録している台帳を指すこと。
+[[source]]
+type = "json_ledger"
+name = "notes"
+path = "data/published_notes.json"
+stage = "published"
+# records_key = "notes"        # 配列が dict の下にある場合だけ指定
+id_field = "note_id"
+title_field = "title"
+timestamp_field = "published_at"
