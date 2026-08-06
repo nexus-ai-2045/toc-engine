@@ -32,6 +32,8 @@ class JsonLedgerAdapter(Adapter):
         id_field: str = "id",
         title_field: str = "title",
         timestamp_field: str = "published_at",
+        filter_field: str = "",
+        filter_value: str = "",
     ) -> None:
         self.name = name
         self._path = Path(path)
@@ -40,6 +42,8 @@ class JsonLedgerAdapter(Adapter):
         self._id_field = id_field
         self._title_field = title_field
         self._timestamp_field = timestamp_field
+        self._filter_field = filter_field
+        self._filter_value = filter_value
 
     def stages(self) -> list[Stage]:
         return [Stage(self._stage, 0, terminal=True)]
@@ -59,7 +63,14 @@ class JsonLedgerAdapter(Adapter):
         if not isinstance(data, list):
             logger.warning("台帳のレコードが配列ではありません: %s", self._path)
             return []
-        return [r for r in data if isinstance(r, dict)]
+        records = [r for r in data if isinstance(r, dict)]
+        if self._filter_field:
+            # 台帳の一部だけが完了扱いの場合に絞る (例: visibility=public の repo だけ)
+            records = [
+                r for r in records
+                if str(r.get(self._filter_field, "")) == self._filter_value
+            ]
+        return records
 
     def _age_days(self, record: dict, now: datetime) -> float | None:
         """公開時刻からの経過日数。欠損・解析不能なら None (滞留不明として残す)。"""

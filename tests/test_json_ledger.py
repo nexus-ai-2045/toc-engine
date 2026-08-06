@@ -62,6 +62,29 @@ def test_broken_json_warns_and_returns_empty(tmp_path, caplog):
     assert "ledger.json" in caplog.text
 
 
+def test_filter_keeps_only_matching_records(tmp_path):
+    # 台帳の一部だけが「完了」の場合 (例: visibility=public の repo だけ)
+    path = _write(tmp_path, [
+        {"id": "r1", "title": "公開済み", "visibility": "public"},
+        {"id": "r2", "title": "非公開", "visibility": "private"},
+        {"id": "r3", "title": "ローカルのみ", "visibility": "local_only"},
+    ])
+    adapter = JsonLedgerAdapter(
+        "repos", str(path), stage="published",
+        id_field="id", title_field="title",
+        filter_field="visibility", filter_value="public",
+    )
+    items = adapter.scan()
+    assert [i.title for i in items] == ["公開済み"]
+
+
+def test_no_filter_keeps_all_records(tmp_path):
+    # filter 未指定なら全件 (既存挙動を壊さない)
+    path = _write(tmp_path, [{"id": "a"}, {"id": "b"}])
+    adapter = JsonLedgerAdapter("x", str(path), stage="done", id_field="id")
+    assert len(adapter.scan()) == 2
+
+
 def test_record_missing_timestamp_keeps_item_with_unknown_age(tmp_path):
     # 日時欠損は「滞留不明」として残す（黙って捨てない）
     path = _write(tmp_path, [{"id": "n1", "title": "日付なし"}])

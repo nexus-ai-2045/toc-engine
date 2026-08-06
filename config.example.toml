@@ -36,3 +36,18 @@ stage = "published"
 id_field = "note_id"
 title_field = "title"
 timestamp_field = "published_at"
+
+# filter_field / filter_value: 台帳の一部だけが「完了」の場合に絞る。
+# 例: 管理台帳に private / draft も載っているとき、公開済みだけを Throughput に数える。
+# 絞らないと未公開のものまで「世に出した」と計上してしまう。
+# [[source]]
+# type = "json_ledger"
+# name = "repos"
+# path = "config/repositories.json"
+# stage = "published"
+# records_key = "repositories"
+# id_field = "name"
+# title_field = "name"
+# timestamp_field = "verified_at"
+# filter_field = "visibility"
+# filter_value = "public"

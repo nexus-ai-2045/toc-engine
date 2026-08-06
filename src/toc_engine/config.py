@@ -59,6 +59,8 @@ def build_adapters(config: Config, base: Path) -> list[Adapter]:
                     id_field=src.get("id_field", "id"),
                     title_field=src.get("title_field", "title"),
                     timestamp_field=src.get("timestamp_field", "published_at"),
+                    filter_field=src.get("filter_field", ""),
+                    filter_value=src.get("filter_value", ""),
                 )
             )
         else:
