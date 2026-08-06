@@ -14,8 +14,15 @@ def build_report(
     candidates: list[ConstraintCandidate],
     recommendations: list[Recommendation],
     notes: list[Note],
+    forecast: dict | None = None,
+    signals: list[dict] | None = None,
 ) -> dict:
-    """全計測結果を Goal 起点の 1 つの dict にまとめる。"""
+    """全計測結果を Goal 起点の 1 つの dict にまとめる。
+
+    forecast / signals は呼び出し側 (cli) で組み立てた JSON 化可能な dict をそのまま
+    受け取る。渡された場合のみキーを追加する（None のまま渡された既存呼び出しは
+    forecast/signals キーなしの従来通りの dict になる）。
+    """
     timeline = [
         {
             "at": snapshot.taken_at.isoformat(),
@@ -27,7 +34,7 @@ def build_report(
         for n in notes
     ]
     timeline.sort(key=lambda e: e["at"], reverse=True)
-    return {
+    report = {
         "goal": {
             "statement": goal.statement,
             "throughput_unit": goal.throughput_unit,
@@ -60,6 +67,11 @@ def build_report(
         ],
         "timeline": timeline,
     }
+    if forecast is not None:
+        report["forecast"] = forecast
+    if signals is not None:
+        report["signals"] = signals
+    return report
 
 
 def render_markdown(report: dict) -> str:

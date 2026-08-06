@@ -47,3 +47,28 @@ def test_render_markdown_leads_with_goal():
     assert "記事を届ける" in lines[0]  # 冒頭は Goal 文
     assert "a:inbox" in md            # 制約が載る
     assert "観察から始める" in md      # 推奨が載る
+
+
+def test_build_report_includes_forecast_and_signals_when_provided():
+    goal, snap, metrics, candidates, recs, notes = _fixture()
+    forecast = {
+        "available": True,
+        "percentiles": {"50": 3.0, "70": 4.0, "85": 5.0},
+        "trials": 1000,
+        "samples_used": 6,
+    }
+    signals = [{"kind": "constraint_moved", "fired": True, "detail": "制約が a→b に変化"}]
+    report = build_report(
+        goal, snap, metrics, candidates, recs, notes,
+        forecast=forecast, signals=signals,
+    )
+    assert report["forecast"] == forecast
+    assert report["signals"] == signals
+    json.dumps(report)  # JSON 化可能なまま
+
+
+def test_build_report_omits_forecast_and_signals_when_not_provided():
+    goal, snap, metrics, candidates, recs, notes = _fixture()
+    report = build_report(goal, snap, metrics, candidates, recs, notes)
+    assert "forecast" not in report
+    assert "signals" not in report

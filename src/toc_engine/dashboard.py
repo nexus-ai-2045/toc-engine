@@ -162,6 +162,42 @@ def _aging(report: dict) -> str:
     )
 
 
+def _forecast_card(report: dict) -> str:
+    """予測カード。report に forecast キーが無ければ空文字（カード非表示）。"""
+    payload = report.get("forecast")
+    if payload is None:
+        return ""
+    if not payload.get("available"):
+        body = f"<p>予測不能: {_esc(payload.get('reason', '理由不明'))}</p>"
+    else:
+        pct = payload["percentiles"]
+        items = "".join(
+            f"<li>{_esc(p)}%タイル: {_esc(pct[p])} 期間</li>" for p in sorted(pct, key=int)
+        )
+        body = (
+            f"<ul>{items}</ul>"
+            f"<p class='muted'>サンプル {_esc(payload['samples_used'])} 期間 /"
+            f" 試行 {_esc(payload['trials'])} 回</p>"
+        )
+    return f"<div class='card'><h2>📈 完了予測</h2>{body}</div>"
+
+
+def _signals_card(report: dict) -> str:
+    """レビュー招集シグナルカード。report に signals キーが無ければ空文字（カード非表示）。"""
+    signals = report.get("signals")
+    if signals is None:
+        return ""
+    rows = "".join(
+        f"<tr><td>{'🔔' if s['fired'] else ''}</td><td>{_esc(s['kind'])}</td>"
+        f"<td>{_esc(s['detail'])}</td></tr>"
+        for s in signals
+    )
+    return (
+        "<div class='card'><h2>🔔 レビュー招集シグナル</h2>"
+        f"<table><tr><th></th><th>種別</th><th>詳細</th></tr>{rows}</table></div>"
+    )
+
+
 def _timeline(report: dict) -> str:
     items = "".join(
         f"<li><span class='muted'>{_esc(e['at'])}</span>"
@@ -192,6 +228,8 @@ def render_html(
         + "<div class='grid'>"
         + _spotlight(report)
         + _cfd_svg(cfd)
+        + _forecast_card(report)
+        + _signals_card(report)
         + _aging(report)
         + _timeline(report)
         + "</div></body></html>"

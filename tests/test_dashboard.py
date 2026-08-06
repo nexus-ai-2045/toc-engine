@@ -82,3 +82,48 @@ def test_no_badge_means_no_badge_css():
     no_target["goal"] = dict(_REPORT["goal"], target_per_week=None)
     html_text = render_html(no_target, _CFD, _THROUGHPUT)
     assert "health-badge" not in html_text
+
+
+def test_forecast_card_hidden_when_absent():
+    html_text = render_html(_REPORT, _CFD, _THROUGHPUT)
+    assert "完了予測" not in html_text
+
+
+def test_forecast_card_shows_percentiles_when_available():
+    report = dict(
+        _REPORT,
+        forecast={
+            "available": True,
+            "percentiles": {"50": 2.0, "70": 3.0, "85": 4.0},
+            "trials": 1000,
+            "samples_used": 6,
+        },
+    )
+    html_text = render_html(report, _CFD, _THROUGHPUT)
+    assert "完了予測" in html_text
+    assert "50" in html_text and "70" in html_text and "85" in html_text
+
+
+def test_forecast_card_shows_reason_when_unavailable():
+    report = dict(
+        _REPORT,
+        forecast={"available": False, "reason": "計測期間が不足しています"},
+    )
+    html_text = render_html(report, _CFD, _THROUGHPUT)
+    assert "予測不能" in html_text
+    assert "計測期間が不足しています" in html_text
+
+
+def test_signals_card_hidden_when_absent():
+    html_text = render_html(_REPORT, _CFD, _THROUGHPUT)
+    assert "レビュー招集シグナル" not in html_text
+
+
+def test_signals_card_shown_when_present():
+    report = dict(
+        _REPORT,
+        signals=[{"kind": "constraint_moved", "fired": True, "detail": "制約が a→b に変化"}],
+    )
+    html_text = render_html(report, _CFD, _THROUGHPUT)
+    assert "レビュー招集シグナル" in html_text
+    assert "制約が a→b に変化" in html_text
