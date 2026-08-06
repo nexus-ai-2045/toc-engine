@@ -19,6 +19,7 @@ body { font-family: sans-serif; margin: 1.5rem; background: #fafafa; color: #222
 .spotlight { border-left: 6px solid #e15759; }
 .zone-green { background: #59a14f; } .zone-yellow { background: #edc948; color: #222; }
 .zone-red { background: #e15759; }
+.zone-unknown { background: #9aa0a6; }
 .timeline { grid-column: 1 / -1; }
 .timeline li { margin-bottom: .3rem; }
 table { border-collapse: collapse; } td, th { padding: .2rem .6rem; border-bottom: 1px solid #eee; }
@@ -32,10 +33,9 @@ def _esc(value: object) -> str:
     return html_mod.escape(str(value))
 
 
-def _goal_header(report: dict, throughput: list[tuple[str, int]], health: Health) -> str:
+def _goal_header(report: dict, throughput: list[tuple[str, int]], badge: str) -> str:
+    """整形済みバッジ HTML を受け取る。出すか否かの判定はここでは行わない。"""
     g = report["goal"]
-    target_per_week = g.get("target_per_week")
-    badge = _health_badge(health, target_per_week) if target_per_week is not None else ""
     spark = _sparkline(throughput)
     return (
         "<div class='goal'>"
@@ -47,8 +47,14 @@ def _goal_header(report: dict, throughput: list[tuple[str, int]], health: Health
     )
 
 
-def _health_badge(health: Health, target_per_week: float) -> str:
-    """health.throughput_health() の判定結果をバッジ HTML に整形する。"""
+def _health_badge(health: Health, target_per_week: float | None) -> str:
+    """バッジ HTML を返す。出さない場合は空文字。
+
+    「バッジを出すか」の判定はこの関数だけが持つ。CSS 同梱の可否も
+    戻り値が空かどうかで決めることで、条件が 2 箇所に分裂しないようにする。
+    """
+    if target_per_week is None:
+        return ""
     if health.rate_per_week is not None:
         detail = f": {health.rate_per_week:.1f}/週 (目標 {target_per_week:g})"
     else:
@@ -172,17 +178,17 @@ def render_html(
     report: dict, cfd: dict[str, list[int]], throughput: list[tuple[str, int]]
 ) -> str:
     """レポートを自己完結 HTML 1 ファイルにする。外部参照なし。"""
-    # 健全性判定は health.py に一本化。zone が判定できた時だけバッジ用 CSS を足す
+    # 健全性判定は health.py に一本化。バッジを出すかは _health_badge が唯一決め、
+    # CSS 同梱はその結果から導出する (条件を 2 箇所に持たない)。
     health = throughput_health(throughput, report["goal"].get("target_per_week"))
-    css = _CSS_BASE
-    if health.zone != "unknown":
-        css += _CSS_BADGE
+    badge = _health_badge(health, report["goal"].get("target_per_week"))
+    css = _CSS_BASE + (_CSS_BADGE if badge else "")
 
     return (
         "<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
         "<title>toc-engine dashboard</title>"
         f"<style>{css}</style></head><body>"
-        + _goal_header(report, throughput, health)
+        + _goal_header(report, throughput, badge)
         + "<div class='grid'>"
         + _spotlight(report)
         + _cfd_svg(cfd)

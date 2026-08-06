@@ -63,3 +63,13 @@ def test_invalid_datetime_is_unknown_without_raising():
     ]
     result = throughput_health(invalid, 3.0)
     assert result == Health("unknown", None, "日時を解析できません")
+
+
+def test_unparsable_datetime_is_logged(caplog):
+    """日時解析失敗を黙殺せず warning に残す (運用者が原因を追えるように)。"""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        result = throughput_health([("not-a-date", 1), ("also-bad", 5)], 3.0)
+    assert result.zone == "unknown"
+    assert "not-a-date" in caplog.text

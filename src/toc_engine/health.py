@@ -1,8 +1,11 @@
 """スループット健全性ゾーン判定。dashboard.py 等から共通利用する SSOT。"""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 MIN_SPAN_DAYS = 2.0  # これ未満のスパンではレート外挿しない
 
@@ -17,7 +20,7 @@ class Health:
 
 
 def throughput_health(
-    throughput: list[tuple[str, int]],
+    throughput: list[tuple[str, float]],
     target_per_week: float | None,
 ) -> Health:
     """スループット時系列と週次目標から健全性ゾーンを判定する。"""
@@ -29,7 +32,14 @@ def throughput_health(
     try:
         t0 = datetime.fromisoformat(throughput[0][0])
         t1 = datetime.fromisoformat(throughput[-1][0])
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        # 黙殺しない: 運用者がどの入力で壊れたかログから追えるようにする
+        logger.warning(
+            "健全性判定の日時を解析できずスキップ: %r / %r (%s)",
+            throughput[0][0],
+            throughput[-1][0],
+            e,
+        )
         return Health("unknown", None, "日時を解析できません")
 
     span_days = (t1 - t0).total_seconds() / 86400

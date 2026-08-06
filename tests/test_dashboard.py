@@ -61,3 +61,24 @@ def test_health_badge_short_window_shows_no_rate():
     html_text = render_html(_REPORT, _CFD, short)
     assert "計測期間が短い" in html_text
     assert "順調" not in html_text
+
+
+def test_badge_and_css_stay_in_sync_when_zone_unknown():
+    """target 設定済み × zone=unknown でも、バッジと CSS が両方出ること。
+
+    バッジ描画条件と CSS 同梱条件が別々の変数を見ていると、
+    スタイルの当たらない裸のバッジが出る (レビューで実機再現された不具合)。
+    """
+    short = [("2026-07-20T10:00:00+00:00", 1), ("2026-07-20T10:05:00+00:00", 3)]
+    html_text = render_html(_REPORT, _CFD, short)
+    assert "計測期間が短い" in html_text          # バッジ本体は出る
+    assert ".health-badge {" in html_text          # その CSS も必ず同梱される
+    assert ".zone-unknown" in html_text            # unknown の配色定義もある
+
+
+def test_no_badge_means_no_badge_css():
+    """target なしならバッジも CSS も出ない (逆方向の同期)。"""
+    no_target = dict(_REPORT)
+    no_target["goal"] = dict(_REPORT["goal"], target_per_week=None)
+    html_text = render_html(no_target, _CFD, _THROUGHPUT)
+    assert "health-badge" not in html_text

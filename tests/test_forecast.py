@@ -82,3 +82,20 @@ def test_forecast_reasonable_range_for_typical_case():
     assert 3 <= result.percentiles[50] <= 7
     assert result.trials == 500
     assert result.samples_used == 5
+
+
+def test_trials_zero_returns_none():
+    """trials<=0 は IndexError ではなく None (公開 API の頑健性)。"""
+    assert forecast_periods_to_clear(10, [2, 3, 2, 3, 2], trials=0, seed=1) is None
+
+
+def test_saturated_forecast_returns_none(caplog):
+    """上限に張り付いた予測は、それらしい数字を返さず予測不能として扱う。"""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        result = forecast_periods_to_clear(
+            10_000_000, [1, 1, 1, 1, 1], trials=20, seed=1
+        )
+    assert result is None
+    assert "飽和" in caplog.text

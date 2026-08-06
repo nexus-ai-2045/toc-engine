@@ -1,12 +1,15 @@
 """Monte Carlo によるフロー完了予測。単一点予測を出さず、パーセンタイル分布で返す。"""
 from __future__ import annotations
 
+import logging
 import random
 from dataclasses import dataclass
 from datetime import timedelta
 
 from toc_engine.metrics import throughput_total
 from toc_engine.model import Snapshot
+
+logger = logging.getLogger(__name__)
 
 MIN_SAMPLES = 5
 DEFAULT_TRIALS = 10_000
@@ -64,6 +67,8 @@ def forecast_periods_to_clear(
     """残 remaining 件の消化に必要な期間数の分布を返す。予測不能なら None。"""
     if remaining <= 0:
         return None
+    if trials <= 0:
+        return None
     if len(samples) < MIN_SAMPLES:
         return None
     if all(s <= 0 for s in samples):
@@ -81,4 +86,13 @@ def forecast_periods_to_clear(
 
     results.sort()
     percentiles = {p: _percentile(results, p) for p in PERCENTILES}
+    if max(percentiles.values()) >= _MAX_PERIODS:
+        # 上限に張り付いた値は「予測できた」ではなく打ち切りの副産物。
+        # それらしい数字を黙って返すより予測不能として扱う。
+        logger.warning(
+            "予測が上限 %d 期間に飽和したため予測不能として扱います (残 %d 件)",
+            _MAX_PERIODS,
+            remaining,
+        )
+        return None
     return Forecast(percentiles=percentiles, trials=trials, samples_used=len(samples))
