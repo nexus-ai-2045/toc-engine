@@ -98,7 +98,7 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     adapters = build_adapters(config, base=config_path.parent)
     snap = take_snapshot(adapters)
     append_snapshot(_history_path(config), snap)
-    snapshots, notes = read_history(_history_path(config))
+    snapshots, notes, _ = read_history(_history_path(config))
     wip_history = cfd_series(snapshots)
     metrics = stage_metrics(snap)
     candidates = rank(metrics, wip_history)
@@ -115,7 +115,7 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
 
 def _cmd_note(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config))
-    snapshots, _ = read_history(_history_path(config))
+    snapshots, _, _ = read_history(_history_path(config))
     constraint = None
     if snapshots:
         candidates = rank(stage_metrics(snapshots[-1]), cfd_series(snapshots))
@@ -133,7 +133,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     goal = _load_goal_or_exit(config)
     if goal is None:
         return 1
-    snapshots, notes = read_history(_history_path(config))
+    snapshots, notes, _ = read_history(_history_path(config))
     if not snapshots:
         print("履歴がありません。先に `toc snapshot` を実行してください。", file=sys.stderr)
         return 1

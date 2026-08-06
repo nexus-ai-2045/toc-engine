@@ -1,0 +1,84 @@
+"""Monte Carlo によるフロー完了予測。単一点予測を出さず、パーセンタイル分布で返す。"""
+from __future__ import annotations
+
+import random
+from dataclasses import dataclass
+from datetime import timedelta
+
+from toc_engine.metrics import throughput_total
+from toc_engine.model import Snapshot
+
+MIN_SAMPLES = 5
+DEFAULT_TRIALS = 10_000
+PERCENTILES = (50, 70, 85)
+_MAX_PERIODS = 1000  # 1 試行あたりの反復上限（無限ループ防止）
+
+
+@dataclass(frozen=True)
+class Forecast:
+    """完了までの期間数分布。percentiles は単位=期間数。"""
+
+    percentiles: dict[int, float]
+    trials: int
+    samples_used: int
+
+
+def period_throughput(snapshots: list[Snapshot], period_days: float = 7.0) -> list[int]:
+    """snapshot 履歴を period_days ごとのバケットに割り、各期間の完了増分を返す。"""
+    if len(snapshots) < 2:
+        return []
+    ordered = sorted(snapshots, key=lambda s: s.taken_at)
+    start = ordered[0].taken_at
+    period = timedelta(days=period_days)
+
+    # バケット index → バケット末時点の累計完了数（同一バケット内は最後の値で上書き）
+    bucket_cumulative: dict[int, int] = {}
+    for snap in ordered:
+        idx = int((snap.taken_at - start) / period)
+        bucket_cumulative[idx] = throughput_total(snap)
+
+    max_idx = max(bucket_cumulative)
+    increments: list[int] = []
+    prev_cumulative = 0
+    for idx in range(max_idx + 1):
+        cumulative = bucket_cumulative.get(idx, prev_cumulative)
+        increments.append(max(0, cumulative - prev_cumulative))
+        prev_cumulative = cumulative
+    return increments
+
+
+def _percentile(sorted_values: list[int], p: int) -> float:
+    """最近傍順位法でパーセンタイルを取り出す（sorted_values は昇順ソート済み前提）。"""
+    n = len(sorted_values)
+    idx = -(-(p * n) // 100) - 1  # ceil(p * n / 100) - 1 を整数演算のみで計算
+    idx = max(0, min(n - 1, idx))
+    return float(sorted_values[idx])
+
+
+def forecast_periods_to_clear(
+    remaining: int,
+    samples: list[int],
+    trials: int = DEFAULT_TRIALS,
+    seed: int | None = None,
+) -> Forecast | None:
+    """残 remaining 件の消化に必要な期間数の分布を返す。予測不能なら None。"""
+    if remaining <= 0:
+        return None
+    if len(samples) < MIN_SAMPLES:
+        return None
+    if all(s <= 0 for s in samples):
+        return None
+
+    rng = random.Random(seed)
+    results: list[int] = []
+    for _ in range(trials):
+        total = 0
+        periods = 0
+        while total < remaining and periods < _MAX_PERIODS:
+            total += rng.choices(samples, k=1)[0]
+            periods += 1
+        results.append(periods)
+
+    results.sort()
+    percentiles = {p: _percentile(results, p) for p in PERCENTILES}
+    return Forecast(percentiles=percentiles, trials=trials, samples_used=len(samples))
