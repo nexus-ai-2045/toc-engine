@@ -41,9 +41,11 @@ def period_throughput(snapshots: list[Snapshot], period_days: float = 7.0) -> li
         bucket_cumulative[idx] = throughput_total(snap)
 
     max_idx = max(bucket_cumulative)
+    # バケット 0 は「基準点」であって増分ではない。ここを増分扱いすると、
+    # 初回 snapshot 以前に完了済みだった在庫が偽の実績として samples に混入する。
     increments: list[int] = []
-    prev_cumulative = 0
-    for idx in range(max_idx + 1):
+    prev_cumulative = bucket_cumulative[0]
+    for idx in range(1, max_idx + 1):
         cumulative = bucket_cumulative.get(idx, prev_cumulative)
         increments.append(max(0, cumulative - prev_cumulative))
         prev_cumulative = cumulative
@@ -63,16 +65,20 @@ def forecast_periods_to_clear(
     samples: list[int],
     trials: int = DEFAULT_TRIALS,
     seed: int | None = None,
-) -> Forecast | None:
-    """残 remaining 件の消化に必要な期間数の分布を返す。予測不能なら None。"""
+) -> tuple[Forecast | None, str | None]:
+    """残 remaining 件の消化に必要な期間数の分布を返す。
+
+    予測不能なら (None, 理由) を返す。理由文字列はここが SSOT で、
+    呼び出し側 (cli 等) は推測し直さずそのまま表示する。
+    """
     if remaining <= 0:
-        return None
+        return None, "残件がありません"
     if trials <= 0:
-        return None
+        return None, "試行回数が不正です"
     if len(samples) < MIN_SAMPLES:
-        return None
+        return None, f"計測期間が不足しています（{len(samples)}期間、必要 {MIN_SAMPLES}期間以上）"
     if all(s <= 0 for s in samples):
-        return None
+        return None, "計測期間内に完了実績がありません"
 
     rng = random.Random(seed)
     results: list[int] = []
@@ -94,5 +100,5 @@ def forecast_periods_to_clear(
             _MAX_PERIODS,
             remaining,
         )
-        return None
-    return Forecast(percentiles=percentiles, trials=trials, samples_used=len(samples))
+        return None, f"現在のペースでは {_MAX_PERIODS} 期間以内に解消しません"
+    return Forecast(percentiles=percentiles, trials=trials, samples_used=len(samples)), None

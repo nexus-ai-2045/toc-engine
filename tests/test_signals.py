@@ -151,12 +151,31 @@ def test_health_worsened_does_not_fire_without_target():
     assert sig.detail == "目標未設定"
 
 
+def test_health_worsened_fires_on_recent_window_when_cumulative_average_would_hide_it():
+    """回帰: I4。累計平均では長い好調期に薄まって検知できない直近の急減速を検知する。
+
+    初回から idx6 まで速いペースで積み上がった後、直近3期間だけ急減速する。
+    累計平均 (旧実装) では idx0 からの平均が高いまま green を保ち続けるが、
+    直近ウィンドウ同士の比較なら green→red の悪化として捉えられる。
+    """
+    counts = [0, 2, 5, 9, 14, 20, 20, 30, 31, 32]
+    snaps = [
+        _completed_snapshot(_T0 + timedelta(days=7 * i), c) for i, c in enumerate(counts)
+    ]
+    signals = _by_kind(evaluate(snaps, _GOAL, max_interval_days=99, last_review_at=None))
+    sig = signals["health_worsened"]
+    assert sig.fired is True
+    assert "green" in sig.detail and "red" in sig.detail
+
+
 # --- throughput_stalled -----------------------------------------------------
 
 
 def test_throughput_stalled_fires_when_no_increase_over_window():
+    # period_days=7.0(既定)基準で DECLINE_WINDOW+1 個のバケットを作る(週次間隔)。
     snaps = [
-        _completed_snapshot(_T0 + timedelta(days=i), 5) for i in range(DECLINE_WINDOW)
+        _completed_snapshot(_T0 + timedelta(days=7 * i), 5)
+        for i in range(DECLINE_WINDOW + 1)
     ]
     signals = _by_kind(evaluate(snaps, _GOAL, max_interval_days=99, last_review_at=None))
     sig = signals["throughput_stalled"]
@@ -165,7 +184,8 @@ def test_throughput_stalled_fires_when_no_increase_over_window():
 
 def test_throughput_stalled_does_not_fire_when_increasing():
     snaps = [
-        _completed_snapshot(_T0 + timedelta(days=i), i) for i in range(DECLINE_WINDOW)
+        _completed_snapshot(_T0 + timedelta(days=7 * i), i)
+        for i in range(DECLINE_WINDOW + 1)
     ]
     signals = _by_kind(evaluate(snaps, _GOAL, max_interval_days=99, last_review_at=None))
     sig = signals["throughput_stalled"]
@@ -175,7 +195,22 @@ def test_throughput_stalled_does_not_fire_when_increasing():
 
 def test_throughput_stalled_insufficient_below_window():
     snaps = [
-        _completed_snapshot(_T0 + timedelta(days=i), 5) for i in range(DECLINE_WINDOW - 1)
+        _completed_snapshot(_T0 + timedelta(days=7 * i), 5) for i in range(DECLINE_WINDOW)
+    ]
+    signals = _by_kind(evaluate(snaps, _GOAL, max_interval_days=99, last_review_at=None))
+    sig = signals["throughput_stalled"]
+    assert sig.fired is False
+    assert "不足" in sig.detail
+
+
+def test_throughput_stalled_short_interval_snapshots_do_not_fire():
+    """短時間 (分単位) の連続 snapshot は同一期間バケットに収まり誤発火しない (回帰: I3)。
+
+    以前は snapshots[-DECLINE_WINDOW:] を「件数」で見ていたため、1 分間隔で
+    DECLINE_WINDOW 回 snapshot しただけで『停滞』と誤発火していた。
+    """
+    snaps = [
+        _completed_snapshot(_T0 + timedelta(minutes=i), 5) for i in range(DECLINE_WINDOW)
     ]
     signals = _by_kind(evaluate(snaps, _GOAL, max_interval_days=99, last_review_at=None))
     sig = signals["throughput_stalled"]
@@ -236,6 +271,21 @@ def test_interval_exceeded_handles_naive_last_review_as_utc():
     )
     sig = signals["interval_exceeded"]
     assert sig.fired is True
+
+
+def test_interval_exceeded_clamps_negative_elapsed_to_zero():
+    """回帰: M2。review 直後の再実行では『-0.0日』ではなく 0.0日と出る。"""
+    snaps = [
+        _completed_snapshot(_T0, 0),
+        _completed_snapshot(_T0 + timedelta(days=10), 1),
+    ]
+    last_review_at = _T0 + timedelta(days=15)  # 最新 snapshot より後 = review 直後想定
+    signals = _by_kind(
+        evaluate(snaps, _GOAL, max_interval_days=7, last_review_at=last_review_at)
+    )
+    sig = signals["interval_exceeded"]
+    assert sig.fired is False
+    assert sig.detail == "前回レビューから0.0日"
 
 
 

@@ -17,6 +17,7 @@ class Health:
     zone: str  # "green" | "yellow" | "red" | "unknown"
     rate_per_week: float | None
     label: str  # 表示用の日本語
+    target_set: bool = True  # 目標未設定の時だけ False。バッジ表示可否の判定に使う
 
 
 def throughput_health(
@@ -25,7 +26,7 @@ def throughput_health(
 ) -> Health:
     """スループット時系列と週次目標から健全性ゾーンを判定する。"""
     if target_per_week is None:
-        return Health("unknown", None, "目標未設定")
+        return Health("unknown", None, "目標未設定", target_set=False)
     if len(throughput) < 2:
         return Health("unknown", None, "データ不足")
 

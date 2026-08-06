@@ -53,7 +53,7 @@ def _health_badge(health: Health, target_per_week: float | None) -> str:
     「バッジを出すか」の判定はこの関数だけが持つ。CSS 同梱の可否も
     戻り値が空かどうかで決めることで、条件が 2 箇所に分裂しないようにする。
     """
-    if target_per_week is None:
+    if not health.target_set:
         return ""
     if health.rate_per_week is not None:
         detail = f": {health.rate_per_week:.1f}/週 (目標 {target_per_week:g})"

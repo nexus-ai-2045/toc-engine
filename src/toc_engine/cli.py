@@ -9,9 +9,9 @@ from pathlib import Path
 
 from toc_engine.adapters.base import take_snapshot
 from toc_engine.config import Config, build_adapters, load_config
-from toc_engine.constraint import rank
+from toc_engine.constraint import current_constraint, rank
 from toc_engine.dashboard import render_html
-from toc_engine.forecast import MIN_SAMPLES, forecast_periods_to_clear, period_throughput
+from toc_engine.forecast import forecast_periods_to_clear, period_throughput
 from toc_engine.history import append_cycle, append_note, append_snapshot, read_history
 from toc_engine.metrics import cfd_series, stage_metrics, throughput_series
 from toc_engine.model import Goal, GoalNotDefinedError, Note, Snapshot, load_goal, save_goal
@@ -51,14 +51,6 @@ def _review_path(config: Config) -> Path:
     return config.state_dir / "review.json"
 
 
-def _current_constraint(snapshots: list[Snapshot]) -> str | None:
-    """最新 snapshot 時点の制約 1 位 stage 名を返す(_cmd_note と同じ求め方)。"""
-    if not snapshots:
-        return None
-    candidates = rank(stage_metrics(snapshots[-1]), cfd_series(snapshots))
-    return candidates[0].stage_name if candidates else None
-
-
 def _last_review_at(config: Config) -> datetime | None:
     """前回 review 実行時刻を review.json の generated_at から読む。無ければ None。"""
     path = _review_path(config)
@@ -71,27 +63,20 @@ def _last_review_at(config: Config) -> datetime | None:
         return None
 
 
-def _forecast_unavailable_reason(remaining: int, samples: list[int]) -> str:
-    """forecast_periods_to_clear が None を返した理由を推定する。"""
-    if remaining <= 0:
-        return "残件数が 0 件です"
-    if len(samples) < MIN_SAMPLES:
-        return f"計測期間が不足しています（{len(samples)}期間、必要 {MIN_SAMPLES}期間以上）"
-    if all(s <= 0 for s in samples):
-        return "直近の期間で完了実績がありません"
-    return "予測が安定しないため打ち切りました（ばらつきが大きい可能性）"
-
-
 def _forecast_payload(snapshots: list[Snapshot], constraint: str | None) -> dict:
-    """制約の残 WIP から期間予測ペイロードを作る。予測不能なら理由付きで返す。"""
+    """制約の残 WIP から期間予測ペイロードを作る。予測不能なら理由付きで返す。
+
+    予測不能の理由は forecast_periods_to_clear が SSOT。ここでは推測し直さず
+    そのまま使う。
+    """
     if constraint is None:
         return {"available": False, "reason": "制約候補が特定できません"}
     metrics = stage_metrics(snapshots[-1])
     remaining = next((m.wip for m in metrics if m.stage.name == constraint), 0)
     samples = period_throughput(snapshots)
-    forecast = forecast_periods_to_clear(remaining, samples)
+    forecast, reason = forecast_periods_to_clear(remaining, samples)
     if forecast is None:
-        return {"available": False, "reason": _forecast_unavailable_reason(remaining, samples)}
+        return {"available": False, "reason": reason}
     return {
         "available": True,
         "percentiles": {str(p): v for p, v in forecast.percentiles.items()},
@@ -176,11 +161,7 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
 def _cmd_note(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config))
     snapshots, _, _ = read_history(_history_path(config))
-    constraint = None
-    if snapshots:
-        candidates = rank(stage_metrics(snapshots[-1]), cfd_series(snapshots))
-        if candidates:
-            constraint = candidates[0].stage_name
+    constraint = current_constraint(snapshots)
     note = Note(at=datetime.now(timezone.utc), text=args.text, constraint=constraint)
     append_note(_history_path(config), note)
     print(f"記録しました (制約: {constraint or 'なし'})")
@@ -202,7 +183,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     metrics = stage_metrics(snap)
     candidates = rank(metrics, wip_history)
     recs = recommend(candidates, metrics, wip_history)
-    constraint = candidates[0].stage_name if candidates else None
+    constraint = current_constraint(snapshots)
     forecast_payload = _forecast_payload(snapshots, constraint)
     signals = evaluate_signals(
         snapshots, goal, config.max_interval_days, _last_review_at(config)
@@ -229,7 +210,7 @@ def _cmd_cycle(args: argparse.Namespace) -> int:
         print(str(e), file=sys.stderr)
         return 1
     snapshots, _, _ = read_history(_history_path(config))
-    constraint = _current_constraint(snapshots)
+    constraint = current_constraint(snapshots)
     entry = CycleEntry(
         at=datetime.now(timezone.utc), step=step, constraint=constraint or "", action=args.action
     )
@@ -272,7 +253,7 @@ def _cmd_review(args: argparse.Namespace) -> int:
     signals = evaluate_signals(
         snapshots, goal, config.max_interval_days, _last_review_at(config)
     )
-    constraint = _current_constraint(snapshots)
+    constraint = current_constraint(snapshots)
     forecast_payload = _forecast_payload(snapshots, constraint)
 
     wip_history = cfd_series(snapshots)

@@ -9,14 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from toc_engine.constraint import rank
+from toc_engine.constraint import current_constraint
+from toc_engine.forecast import period_throughput
 from toc_engine.health import throughput_health
-from toc_engine.metrics import (
-    cfd_series,
-    stage_metrics,
-    throughput_series,
-    throughput_total,
-)
+from toc_engine.metrics import throughput_series
 from toc_engine.model import Goal, Snapshot
 
 DECLINE_WINDOW = 3  # スループット停滞判定に使う直近 snapshot 数
@@ -54,22 +50,12 @@ def _insufficient(kind: str, count: int) -> Signal:
     return Signal(kind, False, f"snapshot が不足（{count}件）")
 
 
-def _top_constraint(history: list[Snapshot]) -> str | None:
-    """history 末尾時点の制約候補 1 位の stage 名を返す。候補なしなら None。
-
-    レポート側 (cli) と同じ基準で順位を出すため、WIP 履歴 (成長重み) を必ず渡す。
-    ここで基準がズレると「レポートは制約A / シグナルは制約Bのまま」と矛盾表示になる。
-    """
-    candidates = rank(stage_metrics(history[-1]), cfd_series(history))
-    return candidates[0].stage_name if candidates else None
-
-
 def _constraint_moved(snapshots: list[Snapshot]) -> Signal:
-    """直近2 snapshot で rank() の1位 stage 名が変わったか判定する。"""
+    """直近2 snapshot で制約 1 位 stage 名が変わったか判定する。"""
     if len(snapshots) < _MIN_SNAPSHOTS:
         return _insufficient("constraint_moved", len(snapshots))
-    prev_top = _top_constraint(snapshots[:-1])
-    curr_top = _top_constraint(snapshots)
+    prev_top = current_constraint(snapshots[:-1])
+    curr_top = current_constraint(snapshots)
     if prev_top is None or curr_top is None:
         return Signal("constraint_moved", False, "制約候補が特定できません")
     if prev_top != curr_top:
@@ -80,16 +66,23 @@ def _constraint_moved(snapshots: list[Snapshot]) -> Signal:
 
 
 def _health_worsened(snapshots: list[Snapshot], goal: Goal) -> Signal:
-    """直近2 snapshot 時点の健全性ゾーンが悪化したか判定する。"""
+    """直近 DECLINE_WINDOW 期間のゾーンが、その直前の同幅ウィンドウより悪化したか判定する。
+
+    throughput_health 自体は初回 snapshot からの累計平均のままでよい（バッジ表示は
+    それで解釈できる）。しかし累計平均は履歴が伸びるほど直近の変化が薄まり、
+    直近でペースが落ちても検知できない。ここでは直近ウィンドウ同士だけを比較する。
+    """
     if len(snapshots) < _MIN_SNAPSHOTS:
         return _insufficient("health_worsened", len(snapshots))
     if goal.target_per_week is None:
         return Signal("health_worsened", False, "目標未設定")
+    prev_window = snapshots[-DECLINE_WINDOW - 1 : -1]
+    curr_window = snapshots[-DECLINE_WINDOW:]
     prev_zone = throughput_health(
-        throughput_series(snapshots[:-1]), goal.target_per_week
+        throughput_series(prev_window), goal.target_per_week
     ).zone
     curr_zone = throughput_health(
-        throughput_series(snapshots), goal.target_per_week
+        throughput_series(curr_window), goal.target_per_week
     ).zone
     if prev_zone not in _ZONE_SEVERITY or curr_zone not in _ZONE_SEVERITY:
         return Signal("health_worsened", False, "ゾーンを判定できません")
@@ -101,14 +94,20 @@ def _health_worsened(snapshots: list[Snapshot], goal: Goal) -> Signal:
 
 
 def _throughput_stalled(snapshots: list[Snapshot]) -> Signal:
-    """直近 DECLINE_WINDOW 件で完了累計がまったく増えていないか判定する。"""
-    if len(snapshots) < DECLINE_WINDOW:
-        return _insufficient("throughput_stalled", len(snapshots))
-    window = snapshots[-DECLINE_WINDOW:]
-    completed = throughput_total(window[-1]) - throughput_total(window[0])
+    """直近 DECLINE_WINDOW 期間で完了増分の合計が 0 か判定する。
+
+    forecast.period_throughput と同じ「期間」の定義を使う。snapshot 件数で数えると
+    短時間に何度も snapshot しただけで誤発火するため、週次バケットの増分で見る。
+    """
+    periods = period_throughput(snapshots)
+    if len(periods) < DECLINE_WINDOW:
+        return Signal(
+            "throughput_stalled", False, f"計測期間が不足（{len(periods)}期間）"
+        )
+    completed = sum(periods[-DECLINE_WINDOW:])
     if completed <= 0:
         return Signal(
-            "throughput_stalled", True, f"直近{DECLINE_WINDOW}件で完了増分なし"
+            "throughput_stalled", True, f"直近{DECLINE_WINDOW}期間で完了増分なし"
         )
     return Signal("throughput_stalled", False, f"直近で{completed}件完了")
 
@@ -129,8 +128,11 @@ def _interval_exceeded(
     if len(snapshots) < _MIN_SNAPSHOTS:
         return _insufficient("interval_exceeded", len(snapshots))
     baseline = last_review_at if last_review_at is not None else snapshots[0].taken_at
-    elapsed_days = (
-        _as_aware_utc(snapshots[-1].taken_at) - _as_aware_utc(baseline)
-    ).total_seconds() / 86400
+    elapsed_days = max(
+        0.0,
+        (
+            _as_aware_utc(snapshots[-1].taken_at) - _as_aware_utc(baseline)
+        ).total_seconds() / 86400,
+    )
     detail = f"前回レビューから{elapsed_days:.1f}日"
     return Signal("interval_exceeded", elapsed_days > max_interval_days, detail)

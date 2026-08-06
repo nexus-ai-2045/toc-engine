@@ -86,14 +86,18 @@ class Forecast:
     samples_used: int
 
 def period_throughput(snapshots: list[Snapshot], period_days: float = 7.0) -> list[int]
-    """snapshot 履歴から期間ごとの完了増分を出す。負の増分は 0 に丸める。"""
+    """snapshot 履歴から期間ごとの完了増分を出す。負の増分は 0 に丸める。
+
+    最初のバケットは「基準点」であって増分ではない。ここを増分として数えると
+    初回計測より前に完了していた在庫が偽の実績として混入し、予測が楽観側へ大きくズレる。
+    """
 
 def forecast_periods_to_clear(
     remaining: int,
     samples: list[int],
     trials: int = DEFAULT_TRIALS,
     seed: int | None = None,
-) -> Forecast | None
+) -> tuple[Forecast | None, str | None]   # (予測結果, 予測不能の理由)
     """残 remaining 件を消化するのに必要な期間数の分布。
     サンプル不足 (< MIN_SAMPLES) または全サンプルが 0 なら None。
     """

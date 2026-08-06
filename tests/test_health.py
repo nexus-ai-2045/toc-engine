@@ -9,7 +9,8 @@ _TARGET_7DAYS = [
 
 def test_no_target_is_unknown():
     result = throughput_health(_TARGET_7DAYS, None)
-    assert result == Health("unknown", None, "目標未設定")
+    assert result == Health("unknown", None, "目標未設定", target_set=False)
+    assert result.target_set is False
 
 
 def test_single_sample_is_unknown():
