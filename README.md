@@ -17,10 +17,21 @@ Goldratt 系組織とは無関係であり、公式・公認の実装ではあ�
 
 ## セットアップ
 
+### Linux / macOS
+
+```bash
+python3.13 -m venv .venv
+.venv/bin/python -m pip install -e .
+cp config.example.toml config.local.toml
+# config.local.toml に自分のパイプラインのパスを書く
+```
+
+### Windows
+
 ```bash
 py -3.13 -m venv .venv
 .venv/Scripts/python -m pip install -e .
-cp config.example.toml config.local.toml
+copy config.example.toml config.local.toml
 # config.local.toml に自分のパイプラインのパスを書く
 ```
 
