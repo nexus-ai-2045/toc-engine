@@ -37,7 +37,13 @@ copy config.example.toml config.local.toml
 
 ## 使い方
 
+venv を有効化するか、`.venv/bin` 経由で呼ぶ（未 activate の裸の `toc` は見つからない）:
+
 ```bash
+# どちらか一方
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+# または各コマンドを .venv/bin/toc で実行
+
 toc init --config config.local.toml       # Goal を定義（対話）
 toc snapshot --config config.local.toml   # 計測して制約候補を出す
 toc note --config config.local.toml "レビュー工程が辛い"   # 意見を記録
