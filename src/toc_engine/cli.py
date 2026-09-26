@@ -1,4 +1,4 @@
-"""toc コマンド: init / snapshot / note / report。"""
+"""toc コマンド: init / snapshot / note / report / cycle / review。"""
 from __future__ import annotations
 
 import argparse
@@ -9,13 +9,16 @@ from pathlib import Path
 
 from toc_engine.adapters.base import take_snapshot
 from toc_engine.config import Config, build_adapters, load_config
-from toc_engine.constraint import rank
+from toc_engine.constraint import current_constraint, rank
 from toc_engine.dashboard import render_html
-from toc_engine.history import append_note, append_snapshot, read_history
+from toc_engine.forecast import forecast_periods_to_clear, period_throughput
+from toc_engine.history import append_cycle, append_note, append_snapshot, read_history
 from toc_engine.metrics import cfd_series, stage_metrics, throughput_series
-from toc_engine.model import Goal, GoalNotDefinedError, Note, load_goal, save_goal
+from toc_engine.model import Goal, GoalNotDefinedError, Note, Snapshot, load_goal, save_goal
 from toc_engine.recommend import recommend
 from toc_engine.report import build_report, render_markdown
+from toc_engine.signals import Signal, evaluate as evaluate_signals
+from toc_engine.steps import CycleEntry, validate_step
 
 # AI が対話を進行するための質問スキーマ（toc init --schema で取得）
 QUESTION_SCHEMA = {
@@ -42,6 +45,59 @@ def _goal_path(config: Config) -> Path:
 
 def _history_path(config: Config) -> Path:
     return config.state_dir / "history.jsonl"
+
+
+def _review_path(config: Config) -> Path:
+    return config.state_dir / "review.json"
+
+
+def _last_review_at(config: Config) -> datetime | None:
+    """前回 review 実行時刻を review.json の generated_at から読む。無ければ None。"""
+    path = _review_path(config)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return datetime.fromisoformat(data["generated_at"])
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return None
+
+
+def _source_for_constraint(constraint: str, snapshot: Snapshot) -> str | None:
+    """制約 stage に属するアイテムの source、無ければ stage 名の adapter 接頭辞。"""
+    for item in snapshot.items:
+        if item.stage == constraint:
+            return item.source
+    if ":" in constraint:
+        return constraint.split(":", 1)[0]
+    return None
+
+
+def _forecast_payload(snapshots: list[Snapshot], constraint: str | None) -> dict:
+    """制約の残 WIP から期間予測ペイロードを作る。予測不能なら理由付きで返す。
+
+    予測不能の理由は forecast_periods_to_clear が SSOT。ここでは推測し直さず
+    そのまま使う。完了サンプルは制約と同じ source に限定する。
+    """
+    if constraint is None:
+        return {"available": False, "reason": "制約候補が特定できません"}
+    metrics = stage_metrics(snapshots[-1])
+    remaining = next((m.wip for m in metrics if m.stage.name == constraint), 0)
+    source = _source_for_constraint(constraint, snapshots[-1])
+    samples = period_throughput(snapshots, source=source)
+    forecast, reason = forecast_periods_to_clear(remaining, samples)
+    if forecast is None:
+        return {"available": False, "reason": reason}
+    return {
+        "available": True,
+        "percentiles": {str(p): v for p, v in forecast.percentiles.items()},
+        "trials": forecast.trials,
+        "samples_used": forecast.samples_used,
+    }
+
+
+def _signals_payload(signals: list[Signal]) -> list[dict]:
+    return [{"kind": s.kind, "fired": s.fired, "detail": s.detail} for s in signals]
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -98,12 +154,12 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     adapters = build_adapters(config, base=config_path.parent)
     snap = take_snapshot(adapters)
     append_snapshot(_history_path(config), snap)
-    snapshots, notes = read_history(_history_path(config))
+    snapshots, notes, cycles = read_history(_history_path(config))
     wip_history = cfd_series(snapshots)
     metrics = stage_metrics(snap)
     candidates = rank(metrics, wip_history)
     recs = recommend(candidates, metrics, wip_history)
-    report = build_report(goal, snap, metrics, candidates, recs, notes)
+    report = build_report(goal, snap, metrics, candidates, recs, notes, cycles=cycles)
     report_path = config.state_dir / "report.json"
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -115,12 +171,8 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
 
 def _cmd_note(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config))
-    snapshots, _ = read_history(_history_path(config))
-    constraint = None
-    if snapshots:
-        candidates = rank(stage_metrics(snapshots[-1]), cfd_series(snapshots))
-        if candidates:
-            constraint = candidates[0].stage_name
+    snapshots, _, _ = read_history(_history_path(config))
+    constraint = current_constraint(snapshots)
     note = Note(at=datetime.now(timezone.utc), text=args.text, constraint=constraint)
     append_note(_history_path(config), note)
     print(f"記録しました (制約: {constraint or 'なし'})")
@@ -133,7 +185,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     goal = _load_goal_or_exit(config)
     if goal is None:
         return 1
-    snapshots, notes = read_history(_history_path(config))
+    snapshots, notes, cycles = read_history(_history_path(config))
     if not snapshots:
         print("履歴がありません。先に `toc snapshot` を実行してください。", file=sys.stderr)
         return 1
@@ -142,7 +194,15 @@ def _cmd_report(args: argparse.Namespace) -> int:
     metrics = stage_metrics(snap)
     candidates = rank(metrics, wip_history)
     recs = recommend(candidates, metrics, wip_history)
-    report = build_report(goal, snap, metrics, candidates, recs, notes)
+    constraint = current_constraint(snapshots)
+    forecast_payload = _forecast_payload(snapshots, constraint)
+    signals = evaluate_signals(
+        snapshots, goal, config.max_interval_days, _last_review_at(config)
+    )
+    report = build_report(
+        goal, snap, metrics, candidates, recs, notes,
+        forecast=forecast_payload, signals=_signals_payload(signals), cycles=cycles,
+    )
     html_text = render_html(report, wip_history, throughput_series(snapshots))
     html_path = config.state_dir / "dashboard.html"
     md_path = config.state_dir / "report.md"
@@ -150,6 +210,82 @@ def _cmd_report(args: argparse.Namespace) -> int:
     md_path.write_text(render_markdown(report), encoding="utf-8")
     print(f"ダッシュボード: {html_path}")
     print(f"Markdown: {md_path}")
+    return 0
+
+
+def _cmd_cycle(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    try:
+        step = validate_step(args.step)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    snapshots, _, _ = read_history(_history_path(config))
+    constraint = current_constraint(snapshots)
+    entry = CycleEntry(
+        at=datetime.now(timezone.utc), step=step, constraint=constraint or "", action=args.action
+    )
+    append_cycle(_history_path(config), entry)
+    print(f"記録しました ({step} / 制約: {constraint or 'なし'}): {args.action}")
+    return 0
+
+
+def _forecast_markdown_line(payload: dict) -> str:
+    """予測ペイロードを 1 行の Markdown にする。予測不能なら理由を出す。"""
+    if not payload["available"]:
+        return f"予測不能: {payload['reason']}"
+    pct = payload["percentiles"]
+    parts = " / ".join(f"{p}%タイル {pct[p]:g}期間" for p in sorted(pct, key=int))
+    return f"完了までの期間数: {parts}（サンプル {payload['samples_used']} 期間）"
+
+
+def _render_review_markdown(review: dict) -> str:
+    """review dict を Markdown 化する(発火シグナル→予測→制約→推奨打ち手の順)。"""
+    lines = ["# 📋 レビュー議題", "", f"Goal: {review['goal']}", "", "## 🔔 発火シグナル", ""]
+    fired = [s for s in review["signals"] if s["fired"]]
+    lines += [f"- **{s['kind']}**: {s['detail']}" for s in fired] if fired else ["- なし"]
+    lines += ["", "## 📈 予測", "", _forecast_markdown_line(review["forecast"])]
+    lines += ["", "## ⛔ 制約", "", review["constraint"] or "不明"]
+    lines += ["", "## 💡 推奨打ち手", ""]
+    lines += [f"- [{r['step']}] {r['text']}" for r in review["recommendations"]]
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_review(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    goal = _load_goal_or_exit(config)
+    if goal is None:
+        return 1
+    snapshots, _, _ = read_history(_history_path(config))
+    if not snapshots:
+        print("履歴がありません。先に `toc snapshot` を実行してください。", file=sys.stderr)
+        return 1
+
+    signals = evaluate_signals(
+        snapshots, goal, config.max_interval_days, _last_review_at(config)
+    )
+    constraint = current_constraint(snapshots)
+    forecast_payload = _forecast_payload(snapshots, constraint)
+
+    wip_history = cfd_series(snapshots)
+    metrics = stage_metrics(snapshots[-1])
+    candidates = rank(metrics, wip_history)
+    recs = recommend(candidates, metrics, wip_history)
+
+    review = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "goal": goal.statement,
+        "constraint": constraint,
+        "signals": _signals_payload(signals),
+        "forecast": forecast_payload,
+        "recommendations": [
+            {"step": r.step, "text": r.text, "evidence": list(r.evidence)} for r in recs
+        ],
+    }
+    _review_path(config).write_text(
+        json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(_render_review_markdown(review))
     return 0
 
 
@@ -183,6 +319,16 @@ def main(argv: list[str] | None = None) -> int:
     p_report = sub.add_parser("report", help="HTML ダッシュボードを生成する")
     p_report.add_argument("--config", default="config.local.toml")
     p_report.set_defaults(func=_cmd_report)
+
+    p_cycle = sub.add_parser("cycle", help="Five Focusing Steps のサイクルを記録する")
+    p_cycle.add_argument("--config", default="config.local.toml")
+    p_cycle.add_argument("--step", required=True)
+    p_cycle.add_argument("--action", required=True)
+    p_cycle.set_defaults(func=_cmd_cycle)
+
+    p_review = sub.add_parser("review", help="レビュー招集シグナルと予測から議題を生成する")
+    p_review.add_argument("--config", default="config.local.toml")
+    p_review.set_defaults(func=_cmd_review)
 
     args = parser.parse_args(argv)
     return args.func(args)

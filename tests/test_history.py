@@ -18,9 +18,10 @@ def test_snapshot_roundtrip(tmp_path):
     path = tmp_path / "history.jsonl"
     snap = _snap()
     append_snapshot(path, snap)
-    snapshots, notes = read_history(path)
+    snapshots, notes, cycles = read_history(path)
     assert snapshots == [snap]
     assert notes == []
+    assert cycles == []
 
 
 def test_note_roundtrip(tmp_path):
@@ -31,7 +32,7 @@ def test_note_roundtrip(tmp_path):
         constraint="a:inbox",
     )
     append_note(path, note)
-    _, notes = read_history(path)
+    _, notes, _ = read_history(path)
     assert notes == [note]
 
 
@@ -42,20 +43,21 @@ def test_broken_line_is_skipped_with_warning(tmp_path, caplog):
         f.write("{broken json\n")
     append_note(path, Note(datetime(2026, 7, 21, tzinfo=timezone.utc), "ok", None))
     with caplog.at_level(logging.WARNING):
-        snapshots, notes = read_history(path)
+        snapshots, notes, cycles = read_history(path)
     assert len(snapshots) == 1  # 壊れ行の前後は読める
     assert len(notes) == 1
+    assert len(cycles) == 0
     assert "スキップ" in caplog.text
 
 
 def test_read_missing_file_returns_empty(tmp_path):
-    assert read_history(tmp_path / "none.jsonl") == ([], [])
+    assert read_history(tmp_path / "none.jsonl") == ([], [], [])
 
 
 def test_unknown_type_is_skipped_with_warning(tmp_path, caplog):
     path = tmp_path / "history.jsonl"
     path.write_text('{"type": "mystery", "at": "2026-07-20T00:00:00+00:00"}\n', encoding="utf-8")
     with caplog.at_level(logging.WARNING):
-        snapshots, notes = read_history(path)
-    assert (snapshots, notes) == ([], [])
+        snapshots, notes, cycles = read_history(path)
+    assert (snapshots, notes, cycles) == ([], [], [])
     assert "mystery" in caplog.text

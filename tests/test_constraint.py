@@ -1,7 +1,9 @@
 """constraint.py のテスト: スコアリングと除外規則。"""
-from toc_engine.constraint import rank
+from datetime import datetime, timezone
+
+from toc_engine.constraint import current_constraint, rank
 from toc_engine.metrics import StageMetrics
-from toc_engine.model import Stage
+from toc_engine.model import Snapshot, Stage, WorkItem
 
 
 def _m(name, wip, avg_age=None, terminal=False, order=0):
@@ -51,3 +53,28 @@ def test_rank_growth_uses_recent_window_not_first_snapshot():
     history = {"a:inbox": [0, 5, 5, 4]}  # hist[-3]=5, hist[-1]=4 → 成長なし
     result = rank(metrics, wip_history=history)
     assert not any("増加傾向" in e for e in result[0].evidence)
+
+
+# --- current_constraint (回帰: I2 SSOT 化) --------------------------------
+
+
+_STAGES = (Stage("inbox", 0), Stage("done", 1, terminal=True))
+
+
+def _snapshot(taken_at, inbox_count):
+    items = tuple(
+        WorkItem(f"i{i}", f"i{i}", "inbox", "src") for i in range(inbox_count)
+    )
+    return Snapshot(taken_at=taken_at, stages=_STAGES, items=items)
+
+
+def test_current_constraint_returns_none_for_empty_history():
+    assert current_constraint([]) is None
+
+
+def test_current_constraint_returns_top_stage_name():
+    snapshots = [
+        _snapshot(datetime(2026, 1, 1, tzinfo=timezone.utc), 4),
+        _snapshot(datetime(2026, 1, 2, tzinfo=timezone.utc), 6),
+    ]
+    assert current_constraint(snapshots) == "inbox"
