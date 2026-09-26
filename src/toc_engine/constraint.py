@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from toc_engine.metrics import StageMetrics
+from toc_engine.metrics import StageMetrics, cfd_series, stage_metrics
+from toc_engine.model import Snapshot
 
 _AGE_WEIGHT_DAYS = 7.0   # 滞留 1 週間ごとに重み +1
 _GROWTH_FACTOR = 1.5     # WIP 増加傾向の重み
@@ -55,3 +56,15 @@ def rank(
             ConstraintCandidate(m.stage.name, score, tuple(evidence))
         )
     return sorted(candidates, key=lambda c: c.score, reverse=True)
+
+
+def current_constraint(snapshots: list[Snapshot]) -> str | None:
+    """snapshots 末尾時点の制約 1 位の stage 名。候補なし・履歴なしなら None。
+
+    レポート・シグナル・cycle 記録が同じ基準を使うための唯一の入口。
+    ここを経由しないと成長重みの有無などでズレる。
+    """
+    if not snapshots:
+        return None
+    candidates = rank(stage_metrics(snapshots[-1]), cfd_series(snapshots))
+    return candidates[0].stage_name if candidates else None

@@ -7,6 +7,7 @@ from toc_engine.metrics import stage_metrics, throughput_total
 from toc_engine.model import Goal, Note, Snapshot, Stage, WorkItem
 from toc_engine.recommend import Recommendation
 from toc_engine.report import build_report, render_markdown
+from toc_engine.steps import CycleEntry
 
 
 def _fixture():
@@ -47,3 +48,50 @@ def test_render_markdown_leads_with_goal():
     assert "記事を届ける" in lines[0]  # 冒頭は Goal 文
     assert "a:inbox" in md            # 制約が載る
     assert "観察から始める" in md      # 推奨が載る
+
+
+def test_build_report_includes_forecast_and_signals_when_provided():
+    goal, snap, metrics, candidates, recs, notes = _fixture()
+    forecast = {
+        "available": True,
+        "percentiles": {"50": 3.0, "70": 4.0, "85": 5.0},
+        "trials": 1000,
+        "samples_used": 6,
+    }
+    signals = [{"kind": "constraint_moved", "fired": True, "detail": "制約が a→b に変化"}]
+    report = build_report(
+        goal, snap, metrics, candidates, recs, notes,
+        forecast=forecast, signals=signals,
+    )
+    assert report["forecast"] == forecast
+    assert report["signals"] == signals
+    json.dumps(report)  # JSON 化可能なまま
+
+
+def test_build_report_omits_forecast_and_signals_when_not_provided():
+    goal, snap, metrics, candidates, recs, notes = _fixture()
+    report = build_report(goal, snap, metrics, candidates, recs, notes)
+    assert "forecast" not in report
+    assert "signals" not in report
+
+
+def test_build_report_includes_cycle_entries():
+    goal, snap, metrics, candidates, recs, notes = _fixture()
+    cycles = [
+        CycleEntry(
+            at=datetime(2026, 7, 18, tzinfo=timezone.utc),
+            step="exploit",
+            constraint="a:inbox",
+            action="WIP 上限を 3 に",
+        )
+    ]
+    report = build_report(
+        goal, snap, metrics, candidates, recs, notes, cycles=cycles,
+    )
+    kinds = [e["kind"] for e in report["timeline"]]
+    assert "cycle" in kinds
+    cycle = next(e for e in report["timeline"] if e["kind"] == "cycle")
+    assert "exploit" in cycle["text"]
+    assert "WIP 上限" in cycle["text"]
+    md = render_markdown(report)
+    assert "exploit" in md

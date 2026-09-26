@@ -61,3 +61,69 @@ def test_health_badge_short_window_shows_no_rate():
     html_text = render_html(_REPORT, _CFD, short)
     assert "計測期間が短い" in html_text
     assert "順調" not in html_text
+
+
+def test_badge_and_css_stay_in_sync_when_zone_unknown():
+    """target 設定済み × zone=unknown でも、バッジと CSS が両方出ること。
+
+    バッジ描画条件と CSS 同梱条件が別々の変数を見ていると、
+    スタイルの当たらない裸のバッジが出る (レビューで実機再現された不具合)。
+    """
+    short = [("2026-07-20T10:00:00+00:00", 1), ("2026-07-20T10:05:00+00:00", 3)]
+    html_text = render_html(_REPORT, _CFD, short)
+    assert "計測期間が短い" in html_text          # バッジ本体は出る
+    assert ".health-badge {" in html_text          # その CSS も必ず同梱される
+    assert ".zone-unknown" in html_text            # unknown の配色定義もある
+
+
+def test_no_badge_means_no_badge_css():
+    """target なしならバッジも CSS も出ない (逆方向の同期)。"""
+    no_target = dict(_REPORT)
+    no_target["goal"] = dict(_REPORT["goal"], target_per_week=None)
+    html_text = render_html(no_target, _CFD, _THROUGHPUT)
+    assert "health-badge" not in html_text
+
+
+def test_forecast_card_hidden_when_absent():
+    html_text = render_html(_REPORT, _CFD, _THROUGHPUT)
+    assert "完了予測" not in html_text
+
+
+def test_forecast_card_shows_percentiles_when_available():
+    report = dict(
+        _REPORT,
+        forecast={
+            "available": True,
+            "percentiles": {"50": 2.0, "70": 3.0, "85": 4.0},
+            "trials": 1000,
+            "samples_used": 6,
+        },
+    )
+    html_text = render_html(report, _CFD, _THROUGHPUT)
+    assert "完了予測" in html_text
+    assert "50" in html_text and "70" in html_text and "85" in html_text
+
+
+def test_forecast_card_shows_reason_when_unavailable():
+    report = dict(
+        _REPORT,
+        forecast={"available": False, "reason": "計測期間が不足しています"},
+    )
+    html_text = render_html(report, _CFD, _THROUGHPUT)
+    assert "予測不能" in html_text
+    assert "計測期間が不足しています" in html_text
+
+
+def test_signals_card_hidden_when_absent():
+    html_text = render_html(_REPORT, _CFD, _THROUGHPUT)
+    assert "レビュー招集シグナル" not in html_text
+
+
+def test_signals_card_shown_when_present():
+    report = dict(
+        _REPORT,
+        signals=[{"kind": "constraint_moved", "fired": True, "detail": "制約が a→b に変化"}],
+    )
+    html_text = render_html(report, _CFD, _THROUGHPUT)
+    assert "レビュー招集シグナル" in html_text
+    assert "制約が a→b に変化" in html_text

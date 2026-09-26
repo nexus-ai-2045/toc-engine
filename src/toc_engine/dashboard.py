@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import html as html_mod
-from datetime import datetime
+
+from toc_engine.health import Health, throughput_health
 
 _W, _H = 640, 240  # CFD 描画領域
-_MIN_SPAN_DAYS = 2.0  # これ未満の計測スパンではレートを外挿しない
 _PALETTE = ["#4e79a7", "#f28e2b", "#76b7b2", "#e15759", "#59a14f",
             "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac"]
 
@@ -19,6 +19,7 @@ body { font-family: sans-serif; margin: 1.5rem; background: #fafafa; color: #222
 .spotlight { border-left: 6px solid #e15759; }
 .zone-green { background: #59a14f; } .zone-yellow { background: #edc948; color: #222; }
 .zone-red { background: #e15759; }
+.zone-unknown { background: #9aa0a6; }
 .timeline { grid-column: 1 / -1; }
 .timeline li { margin-bottom: .3rem; }
 table { border-collapse: collapse; } td, th { padding: .2rem .6rem; border-bottom: 1px solid #eee; }
@@ -32,11 +33,9 @@ def _esc(value: object) -> str:
     return html_mod.escape(str(value))
 
 
-def _goal_header(report: dict, throughput: list[tuple[str, int]]) -> str:
+def _goal_header(report: dict, throughput: list[tuple[str, int]], badge: str) -> str:
+    """整形済みバッジ HTML を受け取る。出すか否かの判定はここでは行わない。"""
     g = report["goal"]
-    badge = ""
-    if g.get("target_per_week") is not None:
-        badge = _health_badge(g["target_per_week"], throughput)
     spark = _sparkline(throughput)
     return (
         "<div class='goal'>"
@@ -48,27 +47,19 @@ def _goal_header(report: dict, throughput: list[tuple[str, int]]) -> str:
     )
 
 
-def _health_badge(target_per_week: float, throughput: list[tuple[str, int]]) -> str:
-    """直近の週あたり完了ペースを目標と比べ 緑/黄/赤 で表示（簡易フィーバー判定）。"""
-    if len(throughput) < 2:
-        return "<span class='health-badge zone-yellow'>データ不足</span>"
-    t0 = datetime.fromisoformat(throughput[0][0])
-    t1 = datetime.fromisoformat(throughput[-1][0])
-    span_days = (t1 - t0).total_seconds() / 86400
-    if span_days < _MIN_SPAN_DAYS:
-        return "<span class='health-badge zone-yellow'>計測期間が短い</span>"
-    weeks = max(span_days / 7, 1e-9)
-    rate = (throughput[-1][1] - throughput[0][1]) / weeks
-    if rate >= target_per_week:
-        zone, label = "zone-green", "順調"
-    elif rate >= target_per_week * 0.7:
-        zone, label = "zone-yellow", "注意"
+def _health_badge(health: Health, target_per_week: float | None) -> str:
+    """バッジ HTML を返す。出さない場合は空文字。
+
+    「バッジを出すか」の判定はこの関数だけが持つ。CSS 同梱の可否も
+    戻り値が空かどうかで決めることで、条件が 2 箇所に分裂しないようにする。
+    """
+    if not health.target_set:
+        return ""
+    if health.rate_per_week is not None:
+        detail = f": {health.rate_per_week:.1f}/週 (目標 {target_per_week:g})"
     else:
-        zone, label = "zone-red", "危険"
-    return (
-        f"<span class='health-badge {zone}'>{label}:"
-        f" {rate:.1f}/週 (目標 {target_per_week:g})</span>"
-    )
+        detail = f" (目標 {target_per_week:g})"
+    return f"<span class='health-badge zone-{health.zone}'>{health.label}{detail}</span>"
 
 
 def _sparkline(throughput: list[tuple[str, int]]) -> str:
@@ -171,6 +162,42 @@ def _aging(report: dict) -> str:
     )
 
 
+def _forecast_card(report: dict) -> str:
+    """予測カード。report に forecast キーが無ければ空文字（カード非表示）。"""
+    payload = report.get("forecast")
+    if payload is None:
+        return ""
+    if not payload.get("available"):
+        body = f"<p>予測不能: {_esc(payload.get('reason', '理由不明'))}</p>"
+    else:
+        pct = payload["percentiles"]
+        items = "".join(
+            f"<li>{_esc(p)}%タイル: {_esc(pct[p])} 期間</li>" for p in sorted(pct, key=int)
+        )
+        body = (
+            f"<ul>{items}</ul>"
+            f"<p class='muted'>サンプル {_esc(payload['samples_used'])} 期間 /"
+            f" 試行 {_esc(payload['trials'])} 回</p>"
+        )
+    return f"<div class='card'><h2>📈 完了予測</h2>{body}</div>"
+
+
+def _signals_card(report: dict) -> str:
+    """レビュー招集シグナルカード。report に signals キーが無ければ空文字（カード非表示）。"""
+    signals = report.get("signals")
+    if signals is None:
+        return ""
+    rows = "".join(
+        f"<tr><td>{'🔔' if s['fired'] else ''}</td><td>{_esc(s['kind'])}</td>"
+        f"<td>{_esc(s['detail'])}</td></tr>"
+        for s in signals
+    )
+    return (
+        "<div class='card'><h2>🔔 レビュー招集シグナル</h2>"
+        f"<table><tr><th></th><th>種別</th><th>詳細</th></tr>{rows}</table></div>"
+    )
+
+
 def _timeline(report: dict) -> str:
     items = "".join(
         f"<li><span class='muted'>{_esc(e['at'])}</span>"
@@ -187,20 +214,22 @@ def render_html(
     report: dict, cfd: dict[str, list[int]], throughput: list[tuple[str, int]]
 ) -> str:
     """レポートを自己完結 HTML 1 ファイルにする。外部参照なし。"""
-    # バッジが必要かを判定（目標が設定されている場合）
-    need_badge = report["goal"].get("target_per_week") is not None
-    css = _CSS_BASE
-    if need_badge:
-        css += _CSS_BADGE
+    # 健全性判定は health.py に一本化。バッジを出すかは _health_badge が唯一決め、
+    # CSS 同梱はその結果から導出する (条件を 2 箇所に持たない)。
+    health = throughput_health(throughput, report["goal"].get("target_per_week"))
+    badge = _health_badge(health, report["goal"].get("target_per_week"))
+    css = _CSS_BASE + (_CSS_BADGE if badge else "")
 
     return (
         "<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
         "<title>toc-engine dashboard</title>"
         f"<style>{css}</style></head><body>"
-        + _goal_header(report, throughput)
+        + _goal_header(report, throughput, badge)
         + "<div class='grid'>"
         + _spotlight(report)
         + _cfd_svg(cfd)
+        + _forecast_card(report)
+        + _signals_card(report)
         + _aging(report)
         + _timeline(report)
         + "</div></body></html>"

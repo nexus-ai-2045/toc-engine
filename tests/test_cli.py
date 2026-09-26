@@ -96,3 +96,83 @@ def test_report_without_snapshot_errors(workspace, capsys):
     _init_goal(cfg)
     assert main(["report", "--config", str(cfg)]) == 1
     assert "snapshot" in capsys.readouterr().err
+
+
+def test_cycle_records_entry_linked_to_constraint(workspace, capsys):
+    tmp_path, cfg = workspace
+    _init_goal(cfg)
+    main(["snapshot", "--config", str(cfg)])
+    capsys.readouterr()
+    rc = main([
+        "cycle", "--config", str(cfg),
+        "--step", "exploit", "--action", "最古のアイテムから流す",
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "exploit" in out
+    history = (tmp_path / ".toc" / "history.jsonl").read_text(encoding="utf-8")
+    last = json.loads(history.strip().splitlines()[-1])
+    assert last["type"] == "cycle"
+    assert last["step"] == "exploit"
+    assert last["action"] == "最古のアイテムから流す"
+    assert last["constraint"] == "articles:inbox"
+
+
+def test_cycle_unknown_step_errors_without_traceback(workspace, capsys):
+    tmp_path, cfg = workspace
+    _init_goal(cfg)
+    rc = main([
+        "cycle", "--config", str(cfg),
+        "--step", "not-a-step", "--action", "x",
+    ])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "not-a-step" in err
+    assert "Traceback" not in err
+
+
+def test_review_requires_goal(workspace, capsys):
+    tmp_path, cfg = workspace
+    assert main(["review", "--config", str(cfg)]) == 1
+    assert "toc init" in capsys.readouterr().err
+
+
+def test_review_requires_history(workspace, capsys):
+    tmp_path, cfg = workspace
+    _init_goal(cfg)
+    assert main(["review", "--config", str(cfg)]) == 1
+    assert "snapshot" in capsys.readouterr().err
+
+
+def test_review_generates_review_json_with_four_signals(workspace, capsys):
+    tmp_path, cfg = workspace
+    _init_goal(cfg)
+    main(["snapshot", "--config", str(cfg)])
+    capsys.readouterr()
+    rc = main(["review", "--config", str(cfg)])
+    assert rc == 0
+    review_path = tmp_path / ".toc" / "review.json"
+    assert review_path.exists()
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    assert review["goal"] == "記事を届ける"
+    assert len(review["signals"]) == 4
+    assert {s["kind"] for s in review["signals"]} == {
+        "constraint_moved", "health_worsened", "throughput_stalled", "interval_exceeded",
+    }
+    assert "generated_at" in review
+    out = capsys.readouterr().out
+    assert "レビュー議題" in out
+
+
+def test_review_reports_forecast_unavailable_with_reason(workspace, capsys):
+    tmp_path, cfg = workspace
+    _init_goal(cfg)
+    main(["snapshot", "--config", str(cfg)])  # snapshot 1 件だけでは予測不能
+    capsys.readouterr()
+    rc = main(["review", "--config", str(cfg)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "予測不能" in out
+    review = json.loads((tmp_path / ".toc" / "review.json").read_text(encoding="utf-8"))
+    assert review["forecast"]["available"] is False
+    assert review["forecast"]["reason"]
