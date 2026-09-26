@@ -6,7 +6,7 @@ import random
 from dataclasses import dataclass
 from datetime import timedelta
 
-from toc_engine.metrics import throughput_total
+from toc_engine.metrics import throughput_for_source, throughput_total
 from toc_engine.model import Snapshot
 
 logger = logging.getLogger(__name__)
@@ -26,19 +26,31 @@ class Forecast:
     samples_used: int
 
 
-def period_throughput(snapshots: list[Snapshot], period_days: float = 7.0) -> list[int]:
-    """snapshot 履歴を period_days ごとのバケットに割り、各期間の完了増分を返す。"""
+def period_throughput(
+    snapshots: list[Snapshot],
+    period_days: float = 7.0,
+    source: str | None = None,
+) -> list[int]:
+    """snapshot 履歴を period_days ごとのバケットに割り、各期間の完了増分を返す。
+
+    source を渡すとその source の terminal 完了だけを数える（制約フロー限定予測用）。
+    """
     if len(snapshots) < 2:
         return []
     ordered = sorted(snapshots, key=lambda s: s.taken_at)
     start = ordered[0].taken_at
     period = timedelta(days=period_days)
 
+    def _cumulative(snap: Snapshot) -> int:
+        if source is None:
+            return throughput_total(snap)
+        return throughput_for_source(snap, source)
+
     # バケット index → バケット末時点の累計完了数（同一バケット内は最後の値で上書き）
     bucket_cumulative: dict[int, int] = {}
     for snap in ordered:
         idx = int((snap.taken_at - start) / period)
-        bucket_cumulative[idx] = throughput_total(snap)
+        bucket_cumulative[idx] = _cumulative(snap)
 
     max_idx = max(bucket_cumulative)
     # バケット 0 は「基準点」であって増分ではない。ここを増分扱いすると、

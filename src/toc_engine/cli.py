@@ -63,17 +63,28 @@ def _last_review_at(config: Config) -> datetime | None:
         return None
 
 
+def _source_for_constraint(constraint: str, snapshot: Snapshot) -> str | None:
+    """制約 stage に属するアイテムの source、無ければ stage 名の adapter 接頭辞。"""
+    for item in snapshot.items:
+        if item.stage == constraint:
+            return item.source
+    if ":" in constraint:
+        return constraint.split(":", 1)[0]
+    return None
+
+
 def _forecast_payload(snapshots: list[Snapshot], constraint: str | None) -> dict:
     """制約の残 WIP から期間予測ペイロードを作る。予測不能なら理由付きで返す。
 
     予測不能の理由は forecast_periods_to_clear が SSOT。ここでは推測し直さず
-    そのまま使う。
+    そのまま使う。完了サンプルは制約と同じ source に限定する。
     """
     if constraint is None:
         return {"available": False, "reason": "制約候補が特定できません"}
     metrics = stage_metrics(snapshots[-1])
     remaining = next((m.wip for m in metrics if m.stage.name == constraint), 0)
-    samples = period_throughput(snapshots)
+    source = _source_for_constraint(constraint, snapshots[-1])
+    samples = period_throughput(snapshots, source=source)
     forecast, reason = forecast_periods_to_clear(remaining, samples)
     if forecast is None:
         return {"available": False, "reason": reason}
@@ -143,12 +154,12 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     adapters = build_adapters(config, base=config_path.parent)
     snap = take_snapshot(adapters)
     append_snapshot(_history_path(config), snap)
-    snapshots, notes, _ = read_history(_history_path(config))
+    snapshots, notes, cycles = read_history(_history_path(config))
     wip_history = cfd_series(snapshots)
     metrics = stage_metrics(snap)
     candidates = rank(metrics, wip_history)
     recs = recommend(candidates, metrics, wip_history)
-    report = build_report(goal, snap, metrics, candidates, recs, notes)
+    report = build_report(goal, snap, metrics, candidates, recs, notes, cycles=cycles)
     report_path = config.state_dir / "report.json"
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -174,7 +185,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     goal = _load_goal_or_exit(config)
     if goal is None:
         return 1
-    snapshots, notes, _ = read_history(_history_path(config))
+    snapshots, notes, cycles = read_history(_history_path(config))
     if not snapshots:
         print("履歴がありません。先に `toc snapshot` を実行してください。", file=sys.stderr)
         return 1
@@ -190,7 +201,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     )
     report = build_report(
         goal, snap, metrics, candidates, recs, notes,
-        forecast=forecast_payload, signals=_signals_payload(signals),
+        forecast=forecast_payload, signals=_signals_payload(signals), cycles=cycles,
     )
     html_text = render_html(report, wip_history, throughput_series(snapshots))
     html_path = config.state_dir / "dashboard.html"

@@ -132,3 +132,30 @@ def test_saturated_forecast_returns_none_with_reason(caplog):
     assert result is None
     assert "飽和" in caplog.text
     assert "期間以内に解消しません" in reason
+
+
+def test_period_throughput_scopes_to_source():
+    """他ソースの完了増分は制約フローの samples に混ぜない。"""
+    stages = (
+        Stage("a:inbox", 0, False),
+        Stage("a:done", 1, True),
+        Stage("b:inbox", 2, False),
+        Stage("b:done", 3, True),
+    )
+
+    def snap(day, a_done, b_done):
+        items = tuple(
+            [WorkItem(f"a{i}", f"a{i}", "a:done", "a") for i in range(a_done)]
+            + [WorkItem(f"b{i}", f"b{i}", "b:done", "b") for i in range(b_done)]
+        )
+        return Snapshot(
+            taken_at=datetime(2026, 1, 1 + day, tzinfo=timezone.utc),
+            stages=stages,
+            items=items,
+        )
+
+    s1 = snap(0, 2, 10)
+    s2 = snap(7, 5, 40)  # a +3, b +30
+    s3 = snap(14, 9, 90)  # a +4, b +50
+    assert period_throughput([s1, s2, s3], period_days=7.0, source="a") == [3, 4]
+    assert period_throughput([s1, s2, s3], period_days=7.0) == [33, 54]

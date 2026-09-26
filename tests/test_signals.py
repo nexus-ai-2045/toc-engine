@@ -228,7 +228,10 @@ def test_interval_exceeded_fires_when_last_review_is_old():
     ]
     last_review_at = _T0 - timedelta(days=5)
     signals = _by_kind(
-        evaluate(snaps, _GOAL, max_interval_days=7, last_review_at=last_review_at)
+        evaluate(
+            snaps, _GOAL, max_interval_days=7, last_review_at=last_review_at,
+            now=_T0 + timedelta(days=10),
+        )
     )
     sig = signals["interval_exceeded"]
     assert sig.fired is True
@@ -242,7 +245,10 @@ def test_interval_exceeded_does_not_fire_when_last_review_is_recent():
     ]
     last_review_at = _T0 + timedelta(days=9)
     signals = _by_kind(
-        evaluate(snaps, _GOAL, max_interval_days=7, last_review_at=last_review_at)
+        evaluate(
+            snaps, _GOAL, max_interval_days=7, last_review_at=last_review_at,
+            now=_T0 + timedelta(days=10),
+        )
     )
     sig = signals["interval_exceeded"]
     assert sig.fired is False
@@ -254,7 +260,10 @@ def test_interval_exceeded_uses_first_snapshot_when_last_review_none():
         _completed_snapshot(_T0 + timedelta(days=40), 1),
     ]
     signals = _by_kind(
-        evaluate(snaps, _GOAL, max_interval_days=30, last_review_at=None)
+        evaluate(
+            snaps, _GOAL, max_interval_days=30, last_review_at=None,
+            now=_T0 + timedelta(days=40),
+        )
     )
     sig = signals["interval_exceeded"]
     assert sig.fired is True
@@ -267,7 +276,10 @@ def test_interval_exceeded_handles_naive_last_review_as_utc():
     ]
     naive_last_review = datetime(2026, 6, 20)  # tzinfo なし
     signals = _by_kind(
-        evaluate(snaps, _GOAL, max_interval_days=7, last_review_at=naive_last_review)
+        evaluate(
+            snaps, _GOAL, max_interval_days=7, last_review_at=naive_last_review,
+            now=_T0 + timedelta(days=10),
+        )
     )
     sig = signals["interval_exceeded"]
     assert sig.fired is True
@@ -281,11 +293,30 @@ def test_interval_exceeded_clamps_negative_elapsed_to_zero():
     ]
     last_review_at = _T0 + timedelta(days=15)  # 最新 snapshot より後 = review 直後想定
     signals = _by_kind(
-        evaluate(snaps, _GOAL, max_interval_days=7, last_review_at=last_review_at)
+        evaluate(
+            snaps, _GOAL, max_interval_days=7, last_review_at=last_review_at,
+            now=last_review_at,
+        )
     )
     sig = signals["interval_exceeded"]
     assert sig.fired is False
     assert sig.detail == "前回レビューから0.0日"
+
+
+def test_interval_exceeded_uses_wall_clock_not_latest_snapshot():
+    """計測が止まったあとでも壁時計で max_interval が発火する。"""
+    snaps = [
+        _completed_snapshot(_T0, 0),
+        _completed_snapshot(_T0 + timedelta(days=1), 1),
+    ]
+    # 最新 snapshot 基準なら 1 日 < 7 で非発火。壁時計を +10 日にすると発火。
+    signals = _by_kind(
+        evaluate(
+            snaps, _GOAL, max_interval_days=7, last_review_at=_T0,
+            now=_T0 + timedelta(days=10),
+        )
+    )
+    assert signals["interval_exceeded"].fired is True
 
 
 

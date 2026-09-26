@@ -5,6 +5,7 @@ from toc_engine.constraint import ConstraintCandidate
 from toc_engine.metrics import StageMetrics, throughput_total
 from toc_engine.model import Goal, Note, Snapshot
 from toc_engine.recommend import Recommendation
+from toc_engine.steps import CycleEntry
 
 
 def build_report(
@@ -16,12 +17,14 @@ def build_report(
     notes: list[Note],
     forecast: dict | None = None,
     signals: list[dict] | None = None,
+    cycles: list[CycleEntry] | None = None,
 ) -> dict:
     """全計測結果を Goal 起点の 1 つの dict にまとめる。
 
     forecast / signals は呼び出し側 (cli) で組み立てた JSON 化可能な dict をそのまま
     受け取る。渡された場合のみキーを追加する（None のまま渡された既存呼び出しは
     forecast/signals キーなしの従来通りの dict になる）。
+    cycles を渡すとタイムラインに介入記録も載る（before/after 検証用）。
     """
     timeline = [
         {
@@ -32,6 +35,14 @@ def build_report(
     ] + [
         {"at": n.at.isoformat(), "kind": "note", "text": n.text, "constraint": n.constraint}
         for n in notes
+    ] + [
+        {
+            "at": c.at.isoformat(),
+            "kind": "cycle",
+            "text": f"{c.step}: {c.action}",
+            "constraint": c.constraint,
+        }
+        for c in (cycles or [])
     ]
     timeline.sort(key=lambda e: e["at"], reverse=True)
     report = {

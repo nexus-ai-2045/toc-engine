@@ -48,6 +48,19 @@ def throughput_total(snapshot: Snapshot) -> int:
     return sum(1 for i in snapshot.items if i.stage in terminal)
 
 
+def throughput_for_source(snapshot: Snapshot, source: str) -> int:
+    """指定 source の terminal 工程にあるアイテム総数。
+
+    複数ソース構成で制約フローだけの完了累計を取るときに使う。
+    """
+    terminal = {s.name for s in snapshot.stages if s.terminal}
+    return sum(
+        1
+        for i in snapshot.items
+        if i.source == source and i.stage in terminal
+    )
+
+
 def throughput_series(snapshots: list[Snapshot]) -> list[tuple[str, int]]:
     """(ISO 日時, 完了累計) の時系列。ダッシュボードのスパークライン用。"""
     return [(s.taken_at.isoformat(), throughput_total(s)) for s in snapshots]

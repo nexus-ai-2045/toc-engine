@@ -7,6 +7,7 @@ from toc_engine.metrics import stage_metrics, throughput_total
 from toc_engine.model import Goal, Note, Snapshot, Stage, WorkItem
 from toc_engine.recommend import Recommendation
 from toc_engine.report import build_report, render_markdown
+from toc_engine.steps import CycleEntry
 
 
 def _fixture():
@@ -72,3 +73,25 @@ def test_build_report_omits_forecast_and_signals_when_not_provided():
     report = build_report(goal, snap, metrics, candidates, recs, notes)
     assert "forecast" not in report
     assert "signals" not in report
+
+
+def test_build_report_includes_cycle_entries():
+    goal, snap, metrics, candidates, recs, notes = _fixture()
+    cycles = [
+        CycleEntry(
+            at=datetime(2026, 7, 18, tzinfo=timezone.utc),
+            step="exploit",
+            constraint="a:inbox",
+            action="WIP 上限を 3 に",
+        )
+    ]
+    report = build_report(
+        goal, snap, metrics, candidates, recs, notes, cycles=cycles,
+    )
+    kinds = [e["kind"] for e in report["timeline"]]
+    assert "cycle" in kinds
+    cycle = next(e for e in report["timeline"] if e["kind"] == "cycle")
+    assert "exploit" in cycle["text"]
+    assert "WIP 上限" in cycle["text"]
+    md = render_markdown(report)
+    assert "exploit" in md

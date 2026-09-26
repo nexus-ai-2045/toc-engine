@@ -35,13 +35,18 @@ def evaluate(
     goal: Goal,
     max_interval_days: float,
     last_review_at: datetime | None,
+    now: datetime | None = None,
 ) -> list[Signal]:
-    """4 種のシグナルを固定順で判定する。snapshot 不足でも例外を投げず常に4件返す。"""
+    """4 種のシグナルを固定順で判定する。snapshot 不足でも例外を投げず常に4件返す。
+
+    now は interval_exceeded の壁時計。省略時は UTC 現在時刻。テスト注入用。
+    """
+    clock = now if now is not None else datetime.now(timezone.utc)
     return [
         _constraint_moved(snapshots),
         _health_worsened(snapshots, goal),
         _throughput_stalled(snapshots),
-        _interval_exceeded(snapshots, max_interval_days, last_review_at),
+        _interval_exceeded(snapshots, max_interval_days, last_review_at, now=clock),
     ]
 
 
@@ -123,16 +128,20 @@ def _interval_exceeded(
     snapshots: list[Snapshot],
     max_interval_days: float,
     last_review_at: datetime | None,
+    now: datetime | None = None,
 ) -> Signal:
-    """前回レビューからの経過日数が max_interval_days を超えたか判定する。"""
+    """前回レビューからの経過日数が max_interval_days を超えたか判定する。
+
+    終点は最新 snapshot ではなく壁時計 now。計測が止まっている期間でも
+    max_interval_days のフォールバックが発火するようにする。
+    """
     if len(snapshots) < _MIN_SNAPSHOTS:
         return _insufficient("interval_exceeded", len(snapshots))
     baseline = last_review_at if last_review_at is not None else snapshots[0].taken_at
+    end = now if now is not None else datetime.now(timezone.utc)
     elapsed_days = max(
         0.0,
-        (
-            _as_aware_utc(snapshots[-1].taken_at) - _as_aware_utc(baseline)
-        ).total_seconds() / 86400,
+        (_as_aware_utc(end) - _as_aware_utc(baseline)).total_seconds() / 86400,
     )
     detail = f"前回レビューから{elapsed_days:.1f}日"
     return Signal("interval_exceeded", elapsed_days > max_interval_days, detail)
