@@ -67,7 +67,9 @@ def _last_review_at(config: Config) -> datetime | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
+    except (OSError, ValueError) as e:
+        # ValueError は UTF-8 として読めない (UnicodeDecodeError) と
+        # JSON として読めない (JSONDecodeError) の両方を含む
         logger.warning("%s を JSON として読めないため未レビュー扱いにします: %s", path, e)
         return None
     raw = data.get("generated_at") if isinstance(data, dict) else None

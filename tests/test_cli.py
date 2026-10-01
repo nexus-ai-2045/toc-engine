@@ -220,6 +220,19 @@ def test_invalid_review_json_is_warned_and_ignored(
     assert "review.json" in caplog.text
 
 
+def test_non_utf8_review_json_is_warned_and_ignored(workspace, capsys, caplog):
+    """review.json が UTF-8 として読めなくても落ちず、警告して未レビュー扱いにする。"""
+    import logging
+
+    tmp_path, cfg = workspace
+    _init_goal(cfg)
+    main(["snapshot", "--config", str(cfg)])
+    (tmp_path / ".toc" / "review.json").write_bytes(b"\xff\xfe\x00broken")
+    with caplog.at_level(logging.WARNING, logger="toc_engine.cli"):
+        assert main(["report", "--config", str(cfg)]) == 0
+    assert "review.json" in caplog.text
+
+
 def test_missing_review_json_is_silent(workspace, capsys, caplog):
     """review.json が無いのは「まだレビューしていない」正常状態なので警告しない。"""
     import logging
