@@ -3,22 +3,25 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from toc_engine.adapters.base import take_snapshot
 from toc_engine.config import Config, build_adapters, load_config
-from toc_engine.constraint import current_constraint, rank
+from toc_engine.constraint import current_constraint, ranked_candidates
 from toc_engine.dashboard import render_html
 from toc_engine.forecast import forecast_periods_to_clear, period_throughput
 from toc_engine.history import append_cycle, append_note, append_snapshot, read_history
 from toc_engine.metrics import cfd_series, stage_metrics, throughput_series
 from toc_engine.model import Goal, GoalNotDefinedError, Note, Snapshot, load_goal, save_goal
 from toc_engine.recommend import recommend
-from toc_engine.report import build_report, render_markdown
+from toc_engine.report import build_report, forecast_markdown_line, render_markdown
 from toc_engine.signals import Signal, evaluate as evaluate_signals
 from toc_engine.steps import CycleEntry, validate_step
+
+logger = logging.getLogger(__name__)
 
 # AI が対話を進行するための質問スキーマ（toc init --schema で取得）
 QUESTION_SCHEMA = {
@@ -52,14 +55,35 @@ def _review_path(config: Config) -> Path:
 
 
 def _last_review_at(config: Config) -> datetime | None:
-    """前回 review 実行時刻を review.json の generated_at から読む。無ければ None。"""
+    """前回 review 実行時刻を review.json の generated_at から読む。
+
+    ファイルが無いのは「まだレビューしていない」正常状態なので黙って None。
+    中身が壊れている時 (JSON でない・generated_at が無い・文字列でない・日時として
+    読めない) は警告を出して None 扱いにする。ここで落ちると toc review / toc report が
+    使えなくなるため、未レビューとして続行する。
+    """
     path = _review_path(config)
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return datetime.fromisoformat(data["generated_at"])
-    except (json.JSONDecodeError, KeyError, ValueError):
+    except json.JSONDecodeError as e:
+        logger.warning("%s を JSON として読めないため未レビュー扱いにします: %s", path, e)
+        return None
+    raw = data.get("generated_at") if isinstance(data, dict) else None
+    if not isinstance(raw, str):
+        logger.warning(
+            "%s の generated_at が日時文字列ではないため未レビュー扱いにします: %r",
+            path,
+            raw,
+        )
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError as e:
+        logger.warning(
+            "%s の generated_at を日時として読めないため未レビュー扱いにします: %s", path, e
+        )
         return None
 
 
@@ -73,21 +97,29 @@ def _source_for_constraint(constraint: str, snapshot: Snapshot) -> str | None:
     return None
 
 
+def _unavailable_forecast(reason: str | None) -> dict:
+    """予測不能のペイロード。理由は必ず空でない文字列にする (表示側で理由を作らない)。"""
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError(f"予測不能の理由が空です: {reason!r}")
+    return {"available": False, "reason": reason}
+
+
 def _forecast_payload(snapshots: list[Snapshot], constraint: str | None) -> dict:
     """制約の残 WIP から期間予測ペイロードを作る。予測不能なら理由付きで返す。
 
-    予測不能の理由は forecast_periods_to_clear が SSOT。ここでは推測し直さず
-    そのまま使う。完了サンプルは制約と同じ source に限定する。
+    予測不能の理由は 2 つの出どころしかない。予測を試みなかった時は cli 側の具体的な
+    理由、試みた時は forecast_periods_to_clear が返した理由 (推測し直さずそのまま使う)。
+    完了サンプルは制約と同じ source に限定する。
     """
     if constraint is None:
-        return {"available": False, "reason": "制約候補が特定できません"}
+        return _unavailable_forecast("制約候補が特定できません")
     metrics = stage_metrics(snapshots[-1])
     remaining = next((m.wip for m in metrics if m.stage.name == constraint), 0)
     source = _source_for_constraint(constraint, snapshots[-1])
     samples = period_throughput(snapshots, source=source)
     forecast, reason = forecast_periods_to_clear(remaining, samples)
     if forecast is None:
-        return {"available": False, "reason": reason}
+        return _unavailable_forecast(reason)
     return {
         "available": True,
         "percentiles": {str(p): v for p, v in forecast.percentiles.items()},
@@ -157,7 +189,7 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     snapshots, notes, cycles = read_history(_history_path(config))
     wip_history = cfd_series(snapshots)
     metrics = stage_metrics(snap)
-    candidates = rank(metrics, wip_history)
+    candidates = ranked_candidates(snapshots)
     recs = recommend(candidates, metrics, wip_history)
     report = build_report(goal, snap, metrics, candidates, recs, notes, cycles=cycles)
     report_path = config.state_dir / "report.json"
@@ -192,7 +224,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     snap = snapshots[-1]
     wip_history = cfd_series(snapshots)
     metrics = stage_metrics(snap)
-    candidates = rank(metrics, wip_history)
+    candidates = ranked_candidates(snapshots)
     recs = recommend(candidates, metrics, wip_history)
     constraint = current_constraint(snapshots)
     forecast_payload = _forecast_payload(snapshots, constraint)
@@ -230,21 +262,12 @@ def _cmd_cycle(args: argparse.Namespace) -> int:
     return 0
 
 
-def _forecast_markdown_line(payload: dict) -> str:
-    """予測ペイロードを 1 行の Markdown にする。予測不能なら理由を出す。"""
-    if not payload["available"]:
-        return f"予測不能: {payload['reason']}"
-    pct = payload["percentiles"]
-    parts = " / ".join(f"{p}%タイル {pct[p]:g}期間" for p in sorted(pct, key=int))
-    return f"完了までの期間数: {parts}（サンプル {payload['samples_used']} 期間）"
-
-
 def _render_review_markdown(review: dict) -> str:
     """review dict を Markdown 化する(発火シグナル→予測→制約→推奨打ち手の順)。"""
     lines = ["# 📋 レビュー議題", "", f"Goal: {review['goal']}", "", "## 🔔 発火シグナル", ""]
     fired = [s for s in review["signals"] if s["fired"]]
     lines += [f"- **{s['kind']}**: {s['detail']}" for s in fired] if fired else ["- なし"]
-    lines += ["", "## 📈 予測", "", _forecast_markdown_line(review["forecast"])]
+    lines += ["", "## 📈 予測", "", forecast_markdown_line(review["forecast"])]
     lines += ["", "## ⛔ 制約", "", review["constraint"] or "不明"]
     lines += ["", "## 💡 推奨打ち手", ""]
     lines += [f"- [{r['step']}] {r['text']}" for r in review["recommendations"]]
@@ -269,7 +292,7 @@ def _cmd_review(args: argparse.Namespace) -> int:
 
     wip_history = cfd_series(snapshots)
     metrics = stage_metrics(snapshots[-1])
-    candidates = rank(metrics, wip_history)
+    candidates = ranked_candidates(snapshots)
     recs = recommend(candidates, metrics, wip_history)
 
     review = {

@@ -401,15 +401,15 @@ def test_constraint_moved_uses_same_ranking_basis_as_report():
     レポート (cli) は成長重みありで順位を出すため、signals が重みを渡していないと
     「レポートは doing が制約 / シグナルは backlog のまま」と矛盾表示になる。
     """
-    from toc_engine.constraint import rank
-    from toc_engine.metrics import cfd_series, stage_metrics
+    from toc_engine.constraint import ranked_candidates
 
     snapshots = [
         _snapshot(_T0, _stage_items("backlog", 10) + _stage_items("doing", 4)),
         _snapshot(_T0 + timedelta(days=1), _stage_items("backlog", 10) + _stage_items("doing", 6)),
         _snapshot(_T0 + timedelta(days=2), _stage_items("backlog", 10) + _stage_items("doing", 8)),
     ]
-    report_top = rank(stage_metrics(snapshots[-1]), cfd_series(snapshots))[0].stage_name
+    # レポート (cli) は ranked_candidates で候補一覧を出す
+    report_top = ranked_candidates(snapshots)[0].stage_name
     assert report_top == "doing", "前提が崩れている: レポート基準では doing が 1 位のはず"
 
     moved = _by_kind(evaluate(snapshots, _GOAL, max_interval_days=3.0, last_review_at=None))[

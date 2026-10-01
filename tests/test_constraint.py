@@ -1,7 +1,7 @@
 """constraint.py のテスト: スコアリングと除外規則。"""
 from datetime import datetime, timezone
 
-from toc_engine.constraint import current_constraint, rank
+from toc_engine.constraint import current_constraint, rank, ranked_candidates
 from toc_engine.metrics import StageMetrics
 from toc_engine.model import Snapshot, Stage, WorkItem
 
@@ -78,3 +78,31 @@ def test_current_constraint_returns_top_stage_name():
         _snapshot(datetime(2026, 1, 2, tzinfo=timezone.utc), 6),
     ]
     assert current_constraint(snapshots) == "inbox"
+
+
+# --- ranked_candidates (候補一覧の唯一の入口) -------------------------------
+
+
+def test_ranked_candidates_returns_empty_for_empty_history():
+    assert ranked_candidates([]) == []
+
+
+def test_ranked_candidates_uses_latest_snapshot_with_wip_history():
+    """末尾 snapshot のメトリクスと全履歴の WIP 推移 (成長重み) で順位を出す。"""
+    from toc_engine.metrics import cfd_series, stage_metrics
+
+    stages = (Stage("a", 0), Stage("b", 1), Stage("done", 2, terminal=True))
+
+    def snap(day, a_count, b_count):
+        items = tuple(
+            [WorkItem(f"a{i}", f"a{i}", "a", "src", 0.0) for i in range(a_count)]
+            + [WorkItem(f"b{i}", f"b{i}", "b", "src", 0.0) for i in range(b_count)]
+        )
+        return Snapshot(datetime(2026, 1, 1 + day, tzinfo=timezone.utc), stages, items)
+
+    # a は 10 で横ばい、b は 4 → 6 → 8 と増加。成長重みで b (12) が a (10) を上回る
+    snapshots = [snap(0, 10, 4), snap(1, 10, 6), snap(2, 10, 8)]
+    result = ranked_candidates(snapshots)
+    assert result == rank(stage_metrics(snapshots[-1]), cfd_series(snapshots))
+    assert [c.stage_name for c in result] == ["b", "a"]
+    assert current_constraint(snapshots) == result[0].stage_name

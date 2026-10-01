@@ -73,7 +73,10 @@ def test_badge_and_css_stay_in_sync_when_zone_unknown():
     html_text = render_html(_REPORT, _CFD, short)
     assert "計測期間が短い" in html_text          # バッジ本体は出る
     assert ".health-badge {" in html_text          # その CSS も必ず同梱される
-    assert ".zone-unknown" in html_text            # unknown の配色定義もある
+    # バッジ要素そのものに unknown の配色 class が付くこと。
+    # (以前は CSS 定義 '.zone-unknown' の有無を見ていたが、その定義は常に同梱される
+    #  ため、バッジの class が間違っていても必ず通ってしまっていた)
+    assert "class='health-badge zone-unknown'" in html_text
 
 
 def test_no_badge_means_no_badge_css():
@@ -112,6 +115,15 @@ def test_forecast_card_shows_reason_when_unavailable():
     html_text = render_html(report, _CFD, _THROUGHPUT)
     assert "予測不能" in html_text
     assert "計測期間が不足しています" in html_text
+
+
+def test_forecast_card_has_no_fallback_reason():
+    """予測不能の理由は cli が必ず入れる。表示側で '理由不明' を作って隠さない。"""
+    import inspect
+
+    import toc_engine.dashboard as dashboard
+
+    assert "理由不明" not in inspect.getsource(dashboard)
 
 
 def test_signals_card_hidden_when_absent():
