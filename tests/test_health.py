@@ -1,5 +1,22 @@
 """health.py のユニットテスト: throughput_health() のゾーン判定。"""
-from toc_engine.health import Health, throughput_health
+import pytest
+
+from toc_engine.health import Health, throughput_health, zone_for_rate
+
+
+@pytest.mark.parametrize(
+    ("rate", "zone"),
+    [(3.0, "green"), (2.1, "yellow"), (2.0999, "red"), (0.0, "red"), (9.0, "green")],
+)
+def test_zone_for_rate_thresholds(rate, zone):
+    """閾値は zone_for_rate だけが持つ (目標 3.0 → yellow 下限 2.1)。"""
+    assert zone_for_rate(rate, 3.0) == zone
+
+
+def test_throughput_health_uses_zone_for_rate():
+    """バッジのゾーンと zone_for_rate の結果が一致する (閾値を 2 箇所に持たない)。"""
+    result = throughput_health(_TARGET_7DAYS, 3.0)
+    assert result.zone == zone_for_rate(result.rate_per_week, 3.0)
 
 _TARGET_7DAYS = [
     ("2026-07-13T00:00:00+00:00", 0),
