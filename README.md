@@ -20,14 +20,36 @@ Goldratt 系組織とは無関係であり、公式・公認の実装ではあ�
 
 ## セットアップ
 
+### Linux / macOS
+
 ```bash
-py -3.13 -m venv .venv
-.venv/Scripts/python -m pip install -e .
+python3.13 -m venv .venv
+.venv/bin/python -m pip install -e .
 cp config.example.toml config.local.toml
 # config.local.toml に自分のパイプラインのパスを書く
 ```
 
+### Windows（PowerShell）
+
+```powershell
+py -3.13 -m venv .venv
+.venv\Scripts\python -m pip install -e .
+copy config.example.toml config.local.toml
+# config.local.toml に自分のパイプラインのパスを書く
+```
+
 ## 使い方
+
+先に venv を有効化してから `toc` を呼びます。有効化しないと、`toc` が見つからないか、
+別の場所にインストールされた `toc` が動くことがあります。
+
+```bash
+source .venv/bin/activate        # Linux / macOS
+.venv\Scripts\Activate.ps1       # Windows（PowerShell）
+```
+
+有効化しない場合は、`toc` の代わりに `.venv/bin/toc`（Windows は `.venv\Scripts\toc`）を呼びます。
+PowerShell のスクリプト実行が制限されていて `Activate.ps1` が動かない環境でも、この呼び方なら使えます。
 
 ```bash
 toc init --config config.local.toml       # Goal を定義（対話）
