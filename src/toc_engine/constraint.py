@@ -58,13 +58,22 @@ def rank(
     return sorted(candidates, key=lambda c: c.score, reverse=True)
 
 
+def ranked_candidates(snapshots: list[Snapshot]) -> list[ConstraintCandidate]:
+    """snapshots 末尾時点の制約候補を、WIP 履歴の成長重み込みで降順に返す。
+
+    候補一覧が要る呼び出し側 (レポート・推奨打ち手) の唯一の入口。rank の引数を
+    呼び出し側で組み立てると、成長重みの渡し忘れなどで順位がズレる。
+    """
+    if not snapshots:
+        return []
+    return rank(stage_metrics(snapshots[-1]), cfd_series(snapshots))
+
+
 def current_constraint(snapshots: list[Snapshot]) -> str | None:
     """snapshots 末尾時点の制約 1 位の stage 名。候補なし・履歴なしなら None。
 
     レポート・シグナル・cycle 記録が同じ基準を使うための唯一の入口。
-    ここを経由しないと成長重みの有無などでズレる。
+    順位は ranked_candidates と同じものを使う。
     """
-    if not snapshots:
-        return None
-    candidates = rank(stage_metrics(snapshots[-1]), cfd_series(snapshots))
+    candidates = ranked_candidates(snapshots)
     return candidates[0].stage_name if candidates else None

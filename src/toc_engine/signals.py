@@ -10,12 +10,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from toc_engine.constraint import current_constraint
-from toc_engine.forecast import period_throughput
-from toc_engine.health import throughput_health
-from toc_engine.metrics import throughput_series
+from toc_engine.forecast import PERIOD_DAYS, period_throughput
+from toc_engine.health import zone_for_rate
 from toc_engine.model import Goal, Snapshot
 
-DECLINE_WINDOW = 3  # スループット停滞判定に使う直近 snapshot 数
+# 停滞・悪化の判定に使う直近の「期間」の数 (snapshot の件数ではない)。
+# 1 期間の長さと区切り方は forecast.period_throughput だけが決める。
+DECLINE_WINDOW = 3
 _MIN_SNAPSHOTS = 2  # 比較に最低限必要な snapshot 数
 
 _ZONE_SEVERITY = {"green": 0, "yellow": 1, "red": 2}  # 悪化判定用の重症度順
@@ -71,29 +72,38 @@ def _constraint_moved(snapshots: list[Snapshot]) -> Signal:
 
 
 def _health_worsened(snapshots: list[Snapshot], goal: Goal) -> Signal:
-    """直近 DECLINE_WINDOW 期間のゾーンが、その直前の同幅ウィンドウより悪化したか判定する。
+    """直近 DECLINE_WINDOW 期間の完了ペースのゾーンが、その直前の DECLINE_WINDOW
+    期間より悪化したか判定する。
 
-    throughput_health 自体は初回 snapshot からの累計平均のままでよい（バッジ表示は
-    それで解釈できる）。しかし累計平均は履歴が伸びるほど直近の変化が薄まり、
-    直近でペースが落ちても検知できない。ここでは直近ウィンドウ同士だけを比較する。
+    バッジ (throughput_health) は初回 snapshot からの累計平均のままでよい。しかし
+    累計平均は履歴が伸びるほど直近の変化が薄まり、直近でペースが落ちても検知できない。
+    ここでは期間単位の窓同士だけを比較する。窓を snapshot の件数で取ると、短い間隔で
+    snapshot した時に窓の時間幅が縮み、ゾーンが判定できず永久に発火しなくなる。
     """
     if len(snapshots) < _MIN_SNAPSHOTS:
         return _insufficient("health_worsened", len(snapshots))
-    if goal.target_per_week is None:
+    target = goal.target_per_week
+    if target is None:
         return Signal("health_worsened", False, "目標未設定")
-    prev_window = snapshots[-DECLINE_WINDOW - 1 : -1]
-    curr_window = snapshots[-DECLINE_WINDOW:]
-    prev_zone = throughput_health(
-        throughput_series(prev_window), goal.target_per_week
-    ).zone
-    curr_zone = throughput_health(
-        throughput_series(curr_window), goal.target_per_week
-    ).zone
-    if prev_zone not in _ZONE_SEVERITY or curr_zone not in _ZONE_SEVERITY:
-        return Signal("health_worsened", False, "ゾーンを判定できません")
+    periods = period_throughput(snapshots)
+    needed = 2 * DECLINE_WINDOW
+    if len(periods) < needed:
+        return Signal(
+            "health_worsened",
+            False,
+            f"計測期間が不足（{len(periods)}期間、必要 {needed}期間以上）",
+        )
+    weeks_per_window = DECLINE_WINDOW * PERIOD_DAYS / 7
+    prev_rate = sum(periods[-needed:-DECLINE_WINDOW]) / weeks_per_window
+    curr_rate = sum(periods[-DECLINE_WINDOW:]) / weeks_per_window
+    prev_zone = zone_for_rate(prev_rate, target)
+    curr_zone = zone_for_rate(curr_rate, target)
     if _ZONE_SEVERITY[curr_zone] > _ZONE_SEVERITY[prev_zone]:
         return Signal(
-            "health_worsened", True, f"ゾーンが {prev_zone} → {curr_zone} に悪化"
+            "health_worsened",
+            True,
+            f"ゾーンが {prev_zone} → {curr_zone} に悪化"
+            f"（{prev_rate:.1f}/週 → {curr_rate:.1f}/週、目標 {target:g}/週）",
         )
     return Signal("health_worsened", False, "ゾーン変化なし")
 

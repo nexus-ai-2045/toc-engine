@@ -64,17 +64,20 @@ class Health:
     label: str           # 表示用 (日本語)
 
 def throughput_health(throughput: list[tuple[str, int]], target_per_week: float | None) -> Health
+def zone_for_rate(rate_per_week: float, target_per_week: float) -> str
 ```
 
 - `target_per_week is None` → `zone="unknown"`
 - サンプル 2 点未満、またはスパン `< MIN_SPAN_DAYS` → `zone="unknown"`, `label="計測期間が短い"`
 - `rate >= target` → green / `>= target*0.7` → yellow / それ未満 → red
+- この閾値は `zone_for_rate` だけが持つ。バッジ (`throughput_health`) と悪化シグナル (`signals`) は同じ関数を使う
 
 `dashboard.py` はこのモジュールを使うよう書き換える (ロジック重複を消す)。
 
 ### 4.2 `forecast.py`
 
 ```python
+PERIOD_DAYS = 7.0        # 1 期間の長さ。「期間」の定義はこの定数と period_throughput だけが持つ
 MIN_SAMPLES = 5          # これ未満は予測しない (分布の裾が表現できない)
 DEFAULT_TRIALS = 10_000
 PERCENTILES = (50, 70, 85)
@@ -85,11 +88,13 @@ class Forecast:
     trials: int
     samples_used: int
 
-def period_throughput(snapshots: list[Snapshot], period_days: float = 7.0) -> list[int]
-    """snapshot 履歴から期間ごとの完了増分を出す。負の増分は 0 に丸める。
+def period_throughput(snapshots: list[Snapshot], period_days: float = PERIOD_DAYS) -> list[int]
+    """snapshot 履歴から、終わった期間ごとの完了増分を出す。負の増分は 0 に丸める。
 
-    最初のバケットは「基準点」であって増分ではない。ここを増分として数えると
-    初回計測より前に完了していた在庫が偽の実績として混入し、予測が楽観側へ大きくズレる。
+    境界 b_k = 最初の snapshot 時刻 + k * period_days で、その時刻以前で最も新しい
+    snapshot の累計を取り、隣り合う境界の差を増分とする (詳細は 10.6)。
+    最初の snapshot 自体が基準点なので、初回計測より前に完了していた在庫は混入しない。
+    終わっていない最後の期間は数えない。
     """
 
 def forecast_periods_to_clear(
@@ -131,7 +136,7 @@ def evaluate(
 | kind | 発火条件 |
 |---|---|
 | `constraint_moved` | 直近 2 snapshot で制約候補 1 位の stage 名が変わった |
-| `health_worsened` | `health.throughput_health` のゾーンが前回より悪化 (green→yellow→red) |
+| `health_worsened` | 直近 `DECLINE_WINDOW` 期間の完了ペースのゾーン (`health.zone_for_rate`) が、その直前の `DECLINE_WINDOW` 期間より悪化 (green→yellow→red)。完了した期間が `2*DECLINE_WINDOW` 未満なら発火せず期間数を返す |
 | `throughput_stalled` | 直近 `DECLINE_WINDOW` 期間で完了増分が 0 |
 | `interval_exceeded` | `last_review_at` から `max_interval_days` 超過 (未レビューなら初回 snapshot から) |
 
@@ -227,7 +232,7 @@ toc cycle --step <step> --action "<打ち手>" [--config PATH]
 
 対策として「条件を揃える」ではなく **分岐できない構造にする** を選んだ。
 - 成長判定 → `constraint.wip_growth()` を共有
-- 制約の算出 → `constraint.current_constraint()` を唯一の入口にする
+- 制約の算出 → 上位 1 件は `constraint.current_constraint()`、候補一覧は `constraint.ranked_candidates()` を唯一の入口にする (cli からの `rank` 直接呼び出しも撤去し、テストで再混入を検出する)
 - バッジ → 生成関数の戻り値が空かどうかで CSS 同梱を導出する (条件が 1 つしかない)
 
 ### 10.3 予測不能の理由を呼び出し側が推測し直していた
@@ -241,3 +246,57 @@ toc cycle --step <step> --action "<打ち手>" [--config PATH]
 `throughput_stalled` が snapshot の件数で判定していたため、短時間に連続実行しただけで誤発火した。
 `forecast.period_throughput` に正しい期間バケット化が既にあったので、そちらに寄せた。
 招集シグナルは誤発火した時点で価値がゼロになる。
+
+### 10.5 健全性悪化シグナルが、短い間隔の snapshot では永久に発火しなかった
+
+**何が起きたか**: `health_worsened` は判定窓を「直近 `DECLINE_WINDOW` 件の snapshot」で取っていた。
+10.4 で `throughput_stalled` を期間数に直した時に、同じ定数 `DECLINE_WINDOW` を使う
+`health_worsened` だけが件数のまま残り、1 つの定数が「件数」と「期間数」の 2 つの単位を持っていた。
+12 時間間隔で snapshot を取ると窓 3 件は 1 日分しかなく、`health.MIN_SPAN_DAYS` (2 日) を満たせない。
+ゾーンが `unknown` になり、何週間データが溜まっても発火しなかった
+(再現: 12 時間間隔 30 件、10 日間 約 14 件/週 → 5 日間 0 件、目標 10 件/週で `fired=False`「ゾーンを判定できません」)。
+
+**なぜ既存のガードを通過したか**: 既存テストはすべて週次間隔の snapshot で書かれていた。
+週次なら「snapshot 1 件 ≒ 1 期間」なので、件数で数えても期間で数えても結果が一致する。
+また `MIN_SPAN_DAYS` のガード自体は正しく働いており (短いスパンでレートを外挿しない)、
+その結果が「判定できない = 発火しない」として静かに返っていた。例外もログも出ないため、
+「悪化していない」と「判定できていない」が外から区別できなかった。
+
+**どう直したか**: 期間の定義を `forecast.period_throughput` の 1 つに揃え、直近 `DECLINE_WINDOW` 期間の
+完了ペースと、その直前の `DECLINE_WINDOW` 期間の完了ペースを比べる。ゾーンの閾値は
+`health.zone_for_rate` に切り出し、バッジもシグナルも同じ関数で判定する (閾値を 2 箇所に持たない)。
+完了した期間が `2*DECLINE_WINDOW` 未満なら発火せず、「計測期間が不足（2期間、必要 6期間以上）」の
+ように期間数入りで理由を返す。回帰テストは「12 時間間隔で 7 週、前半 4 週 14 件/週・後半 3 週 0 件」で発火すること。
+
+### 10.6 期間ごとの完了数が、終わっていない最後の期間を数え、最初の期間を落としていた
+
+**何が起きたか**: `period_throughput` は snapshot を期間ごとのバケットに割り、各バケットの最後の値を
+そのバケットの累計として使っていた。これには 2 つの誤りがあった。
+
+1. 最後のバケットは、まだ終わっていない期間でも 1 サンプルとして数えた。10 件/週の一定ペースを
+   0, 6.9, 13.9, 20.9, 27.9, 34.9, 35.05 日に計測すると `[10, 10, 10, 10, 1]` になる。
+   末尾の 1 は 35 日目からの 0.15 日分の端数で、これが予測の 1 サンプルとして混ざる
+2. 最初の期間の基準点が「最初のバケットの最後の snapshot」だった。累計 100 / 110 / 115 / 120 を
+   0 / 6 / 13 / 20 日に計測すると `[5, 5]` になり、最初の週の +10 が落ちる
+
+**なぜ既存のガードを通過したか**: 既存テストは snapshot をちょうど期間の境界 (0, 7, 14 日) で取っていた。
+その場合「バケットの最後の値」と「境界での値」は一致するため、誤りが表に出ない。
+10.1 の修正 (最初のバケットを基準点にする) も、最初のバケットに snapshot が 1 件しかない前提で正しかった。
+予測側のガード (サンプル数・全ゼロ・残 0) はサンプルの個数と値しか見ず、各サンプルが
+1 期間まるごとを表しているかは確かめていなかった。
+
+**どう直したか**: 期間の境界で値を取る方式にした。境界 b_k = 最初の snapshot 時刻 + k × 期間
+(k = 0..K、b_K は最後の snapshot 時刻以下の最大の境界)。各境界の値は「その時刻以前で最も新しい snapshot の累計」、
+増分 k = max(0, 値(b_k) − 値(b_{k−1}))。これで (1) 終わっていない最後の期間は数えない
+(2) 最初の期間の完了を数える (3) 計測開始前から完了していた在庫は数えない (10.1 の回帰テストもそのまま通る)。
+上の 2 例はそれぞれ `[9, 10, 10, 10, 10]` と `[10, 5]` になる。前者の 9 は、7 日の境界の値として
+6.9 日時点の累計を使うためで、境界ちょうどに snapshot が無い時の近似である。
+なお前者は直した後もサンプルが 5 個あり予測が出る。35.05 日時点で 0〜35 日の 5 期間が実際に終わっているためで、
+直したのは「端数の 1 期間を数えること」であって、サンプル数の判定ではない。
+
+### 10.7 採用しなかった指摘
+
+| 対象 | 判断 | 理由 |
+|---|---|---|
+| 手書きで壊れた `cycle` 行の扱い | 変えない (行ごとスキップのまま) | `toc cycle` は書き込み時に `steps.validate_step` で step を検証するため、通常の操作では壊れた行は生まれない。手で履歴を書き換えて壊れた行は、読み込み時に行番号付きの warning に残るので、黙って消えることはない |
+| `Health.target_set` | 変えない (残す) | バッジを出すかどうかの判定点を 1 つにするため、意図的に置いた。目標未設定の判定は `throughput_health` だけが行い、バッジ側はその結果を見るだけにしている。消すとバッジ側が `target_per_week` を見て判定し直すことになり、判定点が 2 つになる |

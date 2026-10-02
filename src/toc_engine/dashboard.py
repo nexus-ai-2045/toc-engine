@@ -163,12 +163,16 @@ def _aging(report: dict) -> str:
 
 
 def _forecast_card(report: dict) -> str:
-    """予測カード。report に forecast キーが無ければ空文字（カード非表示）。"""
+    """予測カード。report に forecast キーが無ければ空文字（カード非表示）。
+
+    予測不能の理由は cli が必ず入れる (cli._unavailable_forecast)。ここで代わりの
+    文言を作ると、理由が欠けた不具合が画面上で見えなくなるため作らない。
+    """
     payload = report.get("forecast")
     if payload is None:
         return ""
     if not payload.get("available"):
-        body = f"<p>予測不能: {_esc(payload.get('reason', '理由不明'))}</p>"
+        body = f"<p>予測不能: {_esc(payload['reason'])}</p>"
     else:
         pct = payload["percentiles"]
         items = "".join(
