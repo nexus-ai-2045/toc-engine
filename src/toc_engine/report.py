@@ -85,8 +85,28 @@ def build_report(
     return report
 
 
+def forecast_markdown_line(payload: dict) -> str:
+    """予測ペイロードを 1 行の Markdown にする。予測不能なら理由を出す。
+
+    report.md と toc review の議題が同じ書式になるよう、描画はここだけが持つ。
+    """
+    if not payload["available"]:
+        return f"予測不能: {payload['reason']}"
+    pct = payload["percentiles"]
+    parts = " / ".join(f"{p}%タイル {pct[p]:g}期間" for p in sorted(pct, key=int))
+    return f"完了までの期間数: {parts}（サンプル {payload['samples_used']} 期間）"
+
+
+def _signal_markdown_line(signal: dict) -> str:
+    mark = "🔔 " if signal["fired"] else ""
+    return f"- {mark}**{signal['kind']}**: {signal['detail']}"
+
+
 def render_markdown(report: dict) -> str:
-    """レポート dict を Goal 起点の Markdown にする。"""
+    """レポート dict を Goal 起点の Markdown にする。
+
+    forecast / signals はレポート dict にある時だけ節を出す (HTML と同じ条件)。
+    """
     g = report["goal"]
     lines = [
         f"# 🎯 {g['statement']}",
@@ -104,6 +124,11 @@ def render_markdown(report: dict) -> str:
         lines.append(f"- [{r['step']}] {r['text']}")
         for e in r["evidence"]:
             lines.append(f"  - 根拠: {e}")
+    if "forecast" in report:
+        lines += ["", "## 📈 完了予測", "", forecast_markdown_line(report["forecast"])]
+    if "signals" in report:
+        lines += ["", "## 🔔 レビュー招集シグナル", ""]
+        lines += [_signal_markdown_line(s) for s in report["signals"]]
     lines += ["", "## 工程別メトリクス", "", "| 工程 | WIP | 平均滞留(日) | 最大滞留(日) |", "|---|---|---|---|"]
     for s in report["stages"]:
         avg = f"{s['avg_age_days']:.1f}" if s["avg_age_days"] is not None else "-"

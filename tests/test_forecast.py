@@ -1,5 +1,5 @@
 """forecast.py のテスト。"""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from toc_engine.forecast import (
     MIN_SAMPLES,
@@ -53,6 +53,54 @@ def test_period_throughput_excludes_completed_inventory_before_first_snapshot():
     result = period_throughput([s1, s2, s3], period_days=7.0)
     assert result == [2, 3]
     assert 120 not in result
+
+
+def _snaps_at(days_and_counts):
+    """(経過日数, 完了累計) の列から snapshot 列を作る。"""
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return [_snap(t0 + timedelta(days=d), c) for d, c in days_and_counts]
+
+
+def test_period_throughput_does_not_count_unfinished_last_period():
+    """回帰: 始まったばかりの最後の期間を 1 期間として数えない。
+
+    10 件/週の一定ペースを 0, 6.9, 13.9, 20.9, 27.9, 34.9, 35.05 日に計測する。
+    旧実装は [10, 10, 10, 10, 1] を返した。末尾の 1 は 35 日目から 0.15 日分の
+    端数で、これが 5 件目のサンプルになり MIN_SAMPLES=5 を通過させていた。
+
+    新実装は「期間の境界 (0, 7, 14, ..., 35 日) で値を取る」。35.05 日時点で
+    終わっている期間は 0-7, 7-14, 14-21, 21-28, 28-35 の 5 つ。各境界の値は
+    その時刻以前で最も新しい snapshot の累計なので、7 日境界の値は 6.9 日時点の 9、
+    35 日境界の値は 34.9 日時点の 49 になる。端数の 35.05 日の値 (50) は、まだ
+    終わっていない 35-42 日の期間に属するため、どの増分にも入らない。
+    """
+    snaps = _snaps_at(
+        [(0, 0), (6.9, 9), (13.9, 19), (20.9, 29), (27.9, 39), (34.9, 49), (35.05, 50)]
+    )
+    result = period_throughput(snaps, period_days=7.0)
+    assert result == [9, 10, 10, 10, 10]
+    assert 1 not in result  # 0.15 日分の端数がサンプルとして混入しない
+
+
+def test_period_throughput_counts_first_period_completions():
+    """回帰: 最初の期間に完了した分を落とさない。
+
+    累計 100 / 110 / 115 / 120 を 0 / 6 / 13 / 20 日に計測する。旧実装は最初の
+    期間の基準点に「最初の期間の最後の snapshot (6 日目の 110)」を使ったため、
+    最初の週の +10 が落ちて [5, 5] になっていた。正しくは 0 日目の 100 を基準に
+    7 日境界の値 110 (6 日目時点) との差 10 を数える。計測開始時点で既に完了して
+    いた 100 件は、どの増分にも入らない (C1 の回帰も同時に守る)。
+    """
+    snaps = _snaps_at([(0, 100), (6, 110), (13, 115), (20, 120)])
+    result = period_throughput(snaps, period_days=7.0)
+    assert result == [10, 5]
+    assert 100 not in result
+
+
+def test_period_throughput_shorter_than_one_period_returns_empty():
+    """1 期間に満たない計測では、終わった期間が無いので増分も無い。"""
+    snaps = _snaps_at([(0, 0), (3, 4), (6.9, 9)])
+    assert period_throughput(snaps, period_days=7.0) == []
 
 
 def test_forecast_none_when_samples_below_min():

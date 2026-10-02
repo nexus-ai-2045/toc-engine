@@ -68,6 +68,48 @@ def test_build_report_includes_forecast_and_signals_when_provided():
     json.dumps(report)  # JSON 化可能なまま
 
 
+def test_render_markdown_includes_forecast_and_signals_when_present():
+    """report.md にも HTML と同じく予測とシグナルが載る (回帰: Markdown だけ欠けていた)。"""
+    goal, snap, metrics, candidates, recs, notes = _fixture()
+    forecast = {
+        "available": True,
+        "percentiles": {"50": 3.0, "70": 4.0, "85": 5.0},
+        "trials": 1000,
+        "samples_used": 6,
+    }
+    signals = [
+        {"kind": "constraint_moved", "fired": True, "detail": "制約が a → b に変化"},
+        {"kind": "throughput_stalled", "fired": False, "detail": "直近で4件完了"},
+    ]
+    md = render_markdown(
+        build_report(
+            goal, snap, metrics, candidates, recs, notes,
+            forecast=forecast, signals=signals,
+        )
+    )
+    assert "完了予測" in md
+    assert "50%タイル 3期間" in md and "85%タイル 5期間" in md
+    assert "レビュー招集シグナル" in md
+    assert "constraint_moved" in md and "制約が a → b に変化" in md
+    assert "throughput_stalled" in md and "直近で4件完了" in md
+
+
+def test_render_markdown_shows_forecast_reason_when_unavailable():
+    goal, snap, metrics, candidates, recs, notes = _fixture()
+    forecast = {"available": False, "reason": "計測期間が不足しています（2期間、必要 5期間以上）"}
+    md = render_markdown(
+        build_report(goal, snap, metrics, candidates, recs, notes, forecast=forecast)
+    )
+    assert "予測不能: 計測期間が不足しています（2期間、必要 5期間以上）" in md
+
+
+def test_render_markdown_omits_forecast_and_signals_when_absent():
+    goal, snap, metrics, candidates, recs, notes = _fixture()
+    md = render_markdown(build_report(goal, snap, metrics, candidates, recs, notes))
+    assert "完了予測" not in md
+    assert "レビュー招集シグナル" not in md
+
+
 def test_build_report_omits_forecast_and_signals_when_not_provided():
     goal, snap, metrics, candidates, recs, notes = _fixture()
     report = build_report(goal, snap, metrics, candidates, recs, notes)

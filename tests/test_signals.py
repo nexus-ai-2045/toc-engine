@@ -120,21 +120,32 @@ def _completed_snapshot(taken_at: datetime, completed: int) -> Snapshot:
     return _snapshot(taken_at, items)
 
 
+def _weekly_snapshots(counts: list[int]) -> list[Snapshot]:
+    """週次 (7 日間隔) の snapshot 列。counts[i] は i 週目時点の完了累計。"""
+    return [
+        _completed_snapshot(_T0 + timedelta(days=7 * i), c) for i, c in enumerate(counts)
+    ]
+
+
+# 以下 3 件は、判定窓を「snapshot 件数」から「期間数」に直した時にデータを作り直した。
+# 旧実装は snapshot 3 件 (= 週次なら 2 期間) で比較できたが、新実装は直近
+# DECLINE_WINDOW 期間とその直前の DECLINE_WINDOW 期間を比べるため、
+# 2 * DECLINE_WINDOW (= 6) 期間 = 週次 snapshot 7 件が要る。検証している性質は同じ。
+
+
 def test_health_worsened_fires_green_to_red():
-    s1 = _completed_snapshot(_T0, 0)
-    s2 = _completed_snapshot(_T0 + timedelta(days=7), 3)  # 直近2件で green (rate=3.0)
-    s3 = _completed_snapshot(_T0 + timedelta(days=14), 3)  # 全体だと rate=1.5 -> red
-    signals = _by_kind(evaluate([s1, s2, s3], _GOAL, max_interval_days=99, last_review_at=None))
+    # 前半 3 期間は 3 件/週 (目標 3 → green)、後半 3 期間は 0 件/週 (red)
+    snaps = _weekly_snapshots([0, 3, 6, 9, 9, 9, 9])
+    signals = _by_kind(evaluate(snaps, _GOAL, max_interval_days=99, last_review_at=None))
     sig = signals["health_worsened"]
     assert sig.fired is True
     assert "green" in sig.detail and "red" in sig.detail
 
 
 def test_health_worsened_does_not_fire_when_zone_unchanged():
-    s1 = _completed_snapshot(_T0, 0)
-    s2 = _completed_snapshot(_T0 + timedelta(days=7), 3)  # green
-    s3 = _completed_snapshot(_T0 + timedelta(days=14), 6)  # 全体でも rate=3.0 -> green
-    signals = _by_kind(evaluate([s1, s2, s3], _GOAL, max_interval_days=99, last_review_at=None))
+    # 全期間 3 件/週 → 前後とも green
+    snaps = _weekly_snapshots([0, 3, 6, 9, 12, 15, 18])
+    signals = _by_kind(evaluate(snaps, _GOAL, max_interval_days=99, last_review_at=None))
     sig = signals["health_worsened"]
     assert sig.fired is False
     assert sig.detail == "ゾーン変化なし"
@@ -154,18 +165,71 @@ def test_health_worsened_does_not_fire_without_target():
 def test_health_worsened_fires_on_recent_window_when_cumulative_average_would_hide_it():
     """回帰: I4。累計平均では長い好調期に薄まって検知できない直近の急減速を検知する。
 
-    初回から idx6 まで速いペースで積み上がった後、直近3期間だけ急減速する。
-    累計平均 (旧実装) では idx0 からの平均が高いまま green を保ち続けるが、
-    直近ウィンドウ同士の比較なら green→red の悪化として捉えられる。
+    7 期間は 4 件/週で積み上がった後、直近 3 期間だけ 1 件/週に急減速する。
+    初回からの累計平均は 31 件 / 10 週 = 3.1 件/週で green のまま変わらないが、
+    期間単位の窓同士の比較なら green→red の悪化として捉えられる。
+
+    旧データ [0, 2, 5, 9, 14, 20, 20, 30, 31, 32] は「直近 snapshot 3 件 (= 2 期間)」
+    の窓を前提にしていた。期間数の窓 (直近 3 期間 = +10, +1, +1 で 4 件/週) では
+    減速にならないため、同じ性質を検証できるデータに作り直した。
     """
-    counts = [0, 2, 5, 9, 14, 20, 20, 30, 31, 32]
-    snaps = [
-        _completed_snapshot(_T0 + timedelta(days=7 * i), c) for i, c in enumerate(counts)
-    ]
+    from toc_engine.health import throughput_health
+    from toc_engine.metrics import throughput_series
+
+    snaps = _weekly_snapshots([0, 4, 8, 12, 16, 20, 24, 28, 29, 30, 31])
+    cumulative = throughput_health(throughput_series(snaps), _GOAL.target_per_week)
+    assert cumulative.zone == "green", "前提: 累計平均では悪化が見えない"
     signals = _by_kind(evaluate(snaps, _GOAL, max_interval_days=99, last_review_at=None))
     sig = signals["health_worsened"]
     assert sig.fired is True
     assert "green" in sig.detail and "red" in sig.detail
+
+
+_GOAL_10 = Goal(statement="ship", throughput_unit="件", target_per_week=10.0)
+
+
+def _half_day_snapshots(days: float, completed_at) -> list[Snapshot]:
+    """12 時間間隔の snapshot 列。completed_at(経過日数) がその時点の完了累計を返す。"""
+    count = int(days * 2) + 1
+    return [
+        _completed_snapshot(_T0 + timedelta(hours=12 * i), completed_at(i / 2))
+        for i in range(count)
+    ]
+
+
+def test_health_worsened_fires_with_half_day_snapshots():
+    """回帰: 2 日未満の間隔で snapshot を取っても、ペース急落で発火する。
+
+    旧実装は判定窓を「snapshot の件数」(直近 DECLINE_WINDOW 件) で取っていた。
+    12 時間間隔だと 3 件 = 1 日しかなく、health.MIN_SPAN_DAYS (2 日) を満たせず
+    ゾーンが unknown になり、何週間データが溜まっても永久に発火しなかった。
+
+    49 日間 (7 週)、前半 4 週は 12 時間に 1 件 (14 件/週)、後半 3 週は 0 件。
+    目標 10 件/週に対し、直前 3 期間は green、直近 3 期間は red。
+    """
+    snaps = _half_day_snapshots(49, lambda day: int(min(day, 28) * 2))
+    sig = _by_kind(evaluate(snaps, _GOAL_10, max_interval_days=99, last_review_at=None))[
+        "health_worsened"
+    ]
+    assert sig.fired is True, sig.detail
+    assert "green" in sig.detail and "red" in sig.detail
+
+
+def test_health_worsened_reports_period_count_when_insufficient():
+    """完了した期間が 2*DECLINE_WINDOW 未満なら発火せず、期間数入りの理由を返す。
+
+    元の不具合の再現条件 (12 時間間隔 30 件、10 日間 約 14 件/週 → 5 日間 0 件) は
+    約 2 週間 = 2 期間しかない。比較には直近 DECLINE_WINDOW 期間とその直前の
+    DECLINE_WINDOW 期間が要るため、判定不能ではなく「期間不足」と件数付きで返す。
+    """
+    snaps = _half_day_snapshots(14.5, lambda day: int(min(day, 10) * 2))
+    assert len(snaps) == 30
+    sig = _by_kind(evaluate(snaps, _GOAL_10, max_interval_days=99, last_review_at=None))[
+        "health_worsened"
+    ]
+    assert sig.fired is False
+    assert "2期間" in sig.detail
+    assert f"{2 * DECLINE_WINDOW}期間" in sig.detail
 
 
 # --- throughput_stalled -----------------------------------------------------
@@ -337,15 +401,15 @@ def test_constraint_moved_uses_same_ranking_basis_as_report():
     レポート (cli) は成長重みありで順位を出すため、signals が重みを渡していないと
     「レポートは doing が制約 / シグナルは backlog のまま」と矛盾表示になる。
     """
-    from toc_engine.constraint import rank
-    from toc_engine.metrics import cfd_series, stage_metrics
+    from toc_engine.constraint import ranked_candidates
 
     snapshots = [
         _snapshot(_T0, _stage_items("backlog", 10) + _stage_items("doing", 4)),
         _snapshot(_T0 + timedelta(days=1), _stage_items("backlog", 10) + _stage_items("doing", 6)),
         _snapshot(_T0 + timedelta(days=2), _stage_items("backlog", 10) + _stage_items("doing", 8)),
     ]
-    report_top = rank(stage_metrics(snapshots[-1]), cfd_series(snapshots))[0].stage_name
+    # レポート (cli) は ranked_candidates で候補一覧を出す
+    report_top = ranked_candidates(snapshots)[0].stage_name
     assert report_top == "doing", "前提が崩れている: レポート基準では doing が 1 位のはず"
 
     moved = _by_kind(evaluate(snapshots, _GOAL, max_interval_days=3.0, last_review_at=None))[

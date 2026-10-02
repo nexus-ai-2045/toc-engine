@@ -1,6 +1,7 @@
 """Monte Carlo によるフロー完了予測。単一点予測を出さず、パーセンタイル分布で返す。"""
 from __future__ import annotations
 
+import bisect
 import logging
 import random
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from toc_engine.model import Snapshot
 
 logger = logging.getLogger(__name__)
 
+PERIOD_DAYS = 7.0  # 「1 期間」の長さ。期間の定義はここと period_throughput だけが持つ
 MIN_SAMPLES = 5
 DEFAULT_TRIALS = 10_000
 PERCENTILES = (50, 70, 85)
@@ -28,40 +30,41 @@ class Forecast:
 
 def period_throughput(
     snapshots: list[Snapshot],
-    period_days: float = 7.0,
+    period_days: float = PERIOD_DAYS,
     source: str | None = None,
 ) -> list[int]:
-    """snapshot 履歴を period_days ごとのバケットに割り、各期間の完了増分を返す。
+    """snapshot 履歴から、終わった期間ごとの完了増分を古い順に返す。
+
+    期間の境界 b_k = 最初の snapshot 時刻 + k * period_days (k = 0..K) で累計を取る。
+    b_K は最後の snapshot 時刻以下の最大の境界。境界での累計は「その時刻以前で
+    最も新しい snapshot の累計」とし、増分 k = max(0, 累計(b_k) - 累計(b_{k-1}))。
+
+    - 終わっていない最後の期間 (b_K より後) は数えない。端数の期間を 1 サンプルに
+      すると、数時間分の完了が 1 期間の実績として予測に混ざる
+    - 基準点は最初の snapshot 自体 (b_0)。計測開始前から完了していた在庫は
+      どの増分にも入らず、最初の期間内の完了は落とさない
 
     source を渡すとその source の terminal 完了だけを数える（制約フロー限定予測用）。
     """
+    if period_days <= 0:
+        raise ValueError(f"period_days は正の数が必要です: {period_days!r}")
     if len(snapshots) < 2:
         return []
     ordered = sorted(snapshots, key=lambda s: s.taken_at)
-    start = ordered[0].taken_at
+    times = [s.taken_at for s in ordered]
+    start = times[0]
     period = timedelta(days=period_days)
+    finished_periods = (times[-1] - start) // period
 
-    def _cumulative(snap: Snapshot) -> int:
+    def _cumulative_at(boundary_index: int) -> int:
+        boundary = start + boundary_index * period
+        snap = ordered[bisect.bisect_right(times, boundary) - 1]
         if source is None:
             return throughput_total(snap)
         return throughput_for_source(snap, source)
 
-    # バケット index → バケット末時点の累計完了数（同一バケット内は最後の値で上書き）
-    bucket_cumulative: dict[int, int] = {}
-    for snap in ordered:
-        idx = int((snap.taken_at - start) / period)
-        bucket_cumulative[idx] = _cumulative(snap)
-
-    max_idx = max(bucket_cumulative)
-    # バケット 0 は「基準点」であって増分ではない。ここを増分扱いすると、
-    # 初回 snapshot 以前に完了済みだった在庫が偽の実績として samples に混入する。
-    increments: list[int] = []
-    prev_cumulative = bucket_cumulative[0]
-    for idx in range(1, max_idx + 1):
-        cumulative = bucket_cumulative.get(idx, prev_cumulative)
-        increments.append(max(0, cumulative - prev_cumulative))
-        prev_cumulative = cumulative
-    return increments
+    values = [_cumulative_at(k) for k in range(finished_periods + 1)]
+    return [max(0, curr - prev) for prev, curr in zip(values, values[1:])]
 
 
 def _percentile(sorted_values: list[int], p: int) -> float:

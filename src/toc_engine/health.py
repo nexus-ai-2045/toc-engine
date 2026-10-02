@@ -8,6 +8,22 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 MIN_SPAN_DAYS = 2.0  # これ未満のスパンではレート外挿しない
+YELLOW_RATIO = 0.7  # 目標のこの割合以上なら yellow、未満なら red
+
+_ZONE_LABELS = {"green": "順調", "yellow": "注意", "red": "危険"}
+
+
+def zone_for_rate(rate_per_week: float, target_per_week: float) -> str:
+    """週あたりの完了ペースと目標からゾーン名を返す。
+
+    ゾーンの閾値はこの関数だけが持つ。バッジ (throughput_health) と
+    悪化シグナル (signals) が同じ閾値で判定するための唯一の入口。
+    """
+    if rate_per_week >= target_per_week:
+        return "green"
+    if rate_per_week >= target_per_week * YELLOW_RATIO:
+        return "yellow"
+    return "red"
 
 
 @dataclass(frozen=True)
@@ -49,8 +65,5 @@ def throughput_health(
 
     weeks = span_days / 7
     rate = (throughput[-1][1] - throughput[0][1]) / weeks
-    if rate >= target_per_week:
-        return Health("green", rate, "順調")
-    if rate >= target_per_week * 0.7:
-        return Health("yellow", rate, "注意")
-    return Health("red", rate, "危険")
+    zone = zone_for_rate(rate, target_per_week)
+    return Health(zone, rate, _ZONE_LABELS[zone])

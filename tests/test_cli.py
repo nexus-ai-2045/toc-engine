@@ -164,6 +164,127 @@ def test_review_generates_review_json_with_four_signals(workspace, capsys):
     assert "レビュー議題" in out
 
 
+def test_cli_does_not_call_rank_directly():
+    """制約の順位付けは constraint の入口関数だけを通す (設計 10.2)。
+
+    cli が rank(stage_metrics(...), cfd_series(...)) を直書きすると、引数の渡し方の
+    違いで「レポートの制約」と「シグナル・cycle 記録の制約」がズレる。
+    """
+    import ast
+    import inspect
+
+    import toc_engine.cli as cli
+
+    tree = ast.parse(inspect.getsource(cli))
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    imported = {
+        alias.asname or alias.name
+        for n in ast.walk(tree)
+        if isinstance(n, ast.ImportFrom)
+        for alias in n.names
+    }
+    assert "rank" not in names
+    assert "rank" not in imported
+
+
+@pytest.mark.parametrize(
+    "bad_content",
+    [
+        '{"generated_at": null}',
+        '{"generated_at": 12345}',
+        '{"generated_at": "not-a-date"}',
+        '["not", "a", "dict"]',
+        "{broken json",
+        "{}",
+    ],
+)
+@pytest.mark.parametrize("command", ["review", "report"])
+def test_invalid_review_json_is_warned_and_ignored(
+    workspace, capsys, caplog, bad_content, command
+):
+    """review.json の generated_at が null や数値でも落ちず、警告して未レビュー扱いにする。
+
+    回帰: 旧実装は datetime.fromisoformat(None / 数値) の TypeError を捕まえず、
+    toc review / toc report がクラッシュしていた。
+    """
+    import logging
+
+    tmp_path, cfg = workspace
+    _init_goal(cfg)
+    main(["snapshot", "--config", str(cfg)])
+    (tmp_path / ".toc" / "review.json").write_text(bad_content, encoding="utf-8")
+    capsys.readouterr()
+    with caplog.at_level(logging.WARNING, logger="toc_engine.cli"):
+        assert main([command, "--config", str(cfg)]) == 0
+    assert "review.json" in caplog.text
+
+
+def test_non_utf8_review_json_is_warned_and_ignored(workspace, capsys, caplog):
+    """review.json が UTF-8 として読めなくても落ちず、警告して未レビュー扱いにする。"""
+    import logging
+
+    tmp_path, cfg = workspace
+    _init_goal(cfg)
+    main(["snapshot", "--config", str(cfg)])
+    (tmp_path / ".toc" / "review.json").write_bytes(b"\xff\xfe\x00broken")
+    with caplog.at_level(logging.WARNING, logger="toc_engine.cli"):
+        assert main(["report", "--config", str(cfg)]) == 0
+    assert "review.json" in caplog.text
+
+
+def test_missing_review_json_is_silent(workspace, capsys, caplog):
+    """review.json が無いのは「まだレビューしていない」正常状態なので警告しない。"""
+    import logging
+
+    tmp_path, cfg = workspace
+    _init_goal(cfg)
+    main(["snapshot", "--config", str(cfg)])
+    with caplog.at_level(logging.WARNING, logger="toc_engine.cli"):
+        assert main(["report", "--config", str(cfg)]) == 0
+    assert "review.json" not in caplog.text
+
+
+def test_report_dashboard_shows_forecast_reason_from_forecast(workspace, capsys):
+    """予測を出さない時、ダッシュボードには forecast.py が返した理由がそのまま載る。"""
+    tmp_path, cfg = workspace
+    _init_goal(cfg)
+    main(["snapshot", "--config", str(cfg)])  # snapshot 1 件 = 期間 0 → サンプル不足
+    assert main(["report", "--config", str(cfg)]) == 0
+    html_text = (tmp_path / ".toc" / "dashboard.html").read_text(encoding="utf-8")
+    assert "予測不能: 計測期間が不足しています" in html_text
+    assert "理由不明" not in html_text
+
+
+def test_report_dashboard_shows_reason_when_no_constraint(workspace, capsys):
+    """制約候補が無く予測を試みなかった時も、cli 側の具体的な理由が載る。"""
+    tmp_path, cfg = workspace
+    (tmp_path / "inbox" / "a.md").unlink()  # 未完了が 0 件 → 制約候補なし
+    _init_goal(cfg)
+    main(["snapshot", "--config", str(cfg)])
+    assert main(["report", "--config", str(cfg)]) == 0
+    html_text = (tmp_path / ".toc" / "dashboard.html").read_text(encoding="utf-8")
+    assert "予測不能: 制約候補が特定できません" in html_text
+    assert "理由不明" not in html_text
+
+
+def test_forecast_payload_rejects_unavailable_without_reason(monkeypatch):
+    """予測関数が理由なしで None を返したら、空の理由で黙って進めず例外にする。"""
+    from datetime import datetime, timezone
+
+    import toc_engine.cli as cli
+    from toc_engine.model import Snapshot, Stage, WorkItem
+
+    snap = Snapshot(
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        (Stage("s:inbox", 0), Stage("s:done", 1, terminal=True)),
+        (WorkItem("i1", "i1", "s:inbox", "s"),),
+    )
+    monkeypatch.setattr(cli, "forecast_periods_to_clear", lambda *a, **k: (None, None))
+    with pytest.raises(ValueError):
+        cli._forecast_payload([snap], "s:inbox")
+
+
 def test_review_reports_forecast_unavailable_with_reason(workspace, capsys):
     tmp_path, cfg = workspace
     _init_goal(cfg)
