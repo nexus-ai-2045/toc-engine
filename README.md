@@ -1,26 +1,26 @@
-# toc-engine
+# `toc-engine`
 
-Goal-first な Theory of Constraints（制約理論）エンジン。
-自分の作業パイプラインを計測し、システムの Goal 達成を制限している制約（ボトルネック）を根拠付きで特定する。
+`Goal-first` な制約理論（`Theory of Constraints`）エンジン。
+自分の作業パイプラインを計測し、目標達成を制限している制約（ボトルネック）を根拠付きで特定する。
 
-Eliyahu M. Goldratt『The Goal』で示された制約理論の独立実装です。
-Goldratt 系組織とは無関係であり、公式・公認の実装ではありません。
+`Eliyahu M. Goldratt` の著書『`The Goal`』で示された制約理論の独立実装です。
+`Goldratt` 系組織とは無関係であり、公式・公認の実装ではありません。
 
 ## 特徴
 
-- **Goal-first**: Goal を定義するまで計測できない。「Goal を決めずに計測するな」を仕組みで強制
-- **制約スポットライト**: WIP × 滞留時間 × 増加傾向で制約候補をランク付け、根拠付きで提示
-- **if-then 推奨**: 観測パターンから Exploit / Subordinate の打ち手候補を提案（判断は人間）
-- **自己完結ダッシュボード**: CFD・Aging WIP・タイムラインを 1 つの HTML に生成（サーバ・外部依存なし）
+- **目標優先（`Goal-first`）**: 目標を定義するまで計測できない。「目標を決めずに計測するな」を仕組みで強制
+- **制約スポットライト**: 仕掛かり作業（`WIP`）× 滞留時間 × 増加傾向で制約候補をランク付け、根拠付きで提示
+- **条件付き推奨**: 観測パターンから活用（`Exploit`）・従属（`Subordinate`）の打ち手候補を提案（判断は人間）
+- **自己完結ダッシュボード**: 累積フロー図（`CFD`）・仕掛かり作業の滞留（`Aging WIP`）・タイムラインを 1 つの `HTML` に生成（サーバ・外部依存なし）
 - **定量 × 定性**: 実測メトリクスとあなたの意見（`toc note`）を同じタイムラインで見る
-- **AI 伴走前提**: 質問スキーマ（`toc init --schema`）と JSON レポートで、AI アシスタントが運営を支援できる設計
+- **`AI` 伴走前提**: 質問スキーマ（`toc init --schema`）と `JSON` レポートで、`AI` アシスタントが運営を支援できる設計
 - **シグナル駆動レビュー**: 固定周期ではなく、制約の移動・健全性の悪化・スループット停滞・上限日数の超過を検知して招集する（`toc review`）
-- **予測できない時は予測しない**: Monte Carlo 完了予測はパーセンタイル（50/70/85）で示し、サンプル不足なら数字を出さず理由を返す
-- **サイクル記録**: Five Focusing Steps のどの段階で何を打ったかを記録し（`toc cycle`）、次の計測で効果を検証する
+- **予測できない時は予測しない**: モンテカルロ（`Monte Carlo`）完了予測はパーセンタイル（50/70/85）で示し、サンプル不足なら数字を出さず理由を返す
+- **サイクル記録**: 五つの集中段階（`Five Focusing Steps`）のどの段階で何を打ったかを記録し（`toc cycle`）、次の計測で効果を検証する
 
 ## セットアップ
 
-### Linux / macOS
+### `Linux` / `macOS`
 
 ```bash
 python3.13 -m venv .venv
@@ -29,27 +29,32 @@ cp config.example.toml config.local.toml
 # config.local.toml に自分のパイプラインのパスを書く
 ```
 
-### Windows（PowerShell）
+### `Windows`（`PowerShell`）
 
 ```powershell
 py -3.13 -m venv .venv
-.venv\Scripts\python -m pip install -e .
+.\.venv\Scripts\python.exe -m pip install -e .
 copy config.example.toml config.local.toml
 # config.local.toml に自分のパイプラインのパスを書く
 ```
 
 ## 使い方
 
-先に venv を有効化してから `toc` を呼びます。有効化しないと、`toc` が見つからないか、
+先に仮想環境（`venv`）を有効化してから `toc` を呼びます。有効化しないと、`toc` が見つからないか、
 別の場所にインストールされた `toc` が動くことがあります。
 
 ```bash
-source .venv/bin/activate        # Linux / macOS
-.venv\Scripts\Activate.ps1       # Windows（PowerShell）
+source .venv/bin/activate
 ```
 
-有効化しない場合は、`toc` の代わりに `.venv/bin/toc`（Windows は `.venv\Scripts\toc`）を呼びます。
-PowerShell のスクリプト実行が制限されていて `Activate.ps1` が動かない環境でも、この呼び方なら使えます。
+`Windows` の `PowerShell` では次を実行します。
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+有効化しない場合は、`toc` の代わりに `.venv/bin/toc`（`Windows` は `.\.venv\Scripts\toc.exe`）を呼びます。
+`PowerShell` のスクリプト実行が制限されていて `Activate.ps1` が動かない環境でも、この呼び方なら使えます。
 
 ```bash
 toc init --config config.local.toml       # Goal を定義（対話）
@@ -77,8 +82,8 @@ review（議題生成）→ 解釈・判断 → cycle（打ち手を記録）
 
 ## 設計
 
-設計判断とその根拠は [docs/design/](docs/design/) にあります。
+設計判断とその根拠は [設計文書](docs/design/) にあります。
 
 ## ライセンス
 
-MIT
+`MIT`
