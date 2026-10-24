@@ -1,0 +1,53 @@
+# toc-engine 設定サンプル。
+# 実運用ではこのファイルを config.local.toml にコピーして実パスを書く。
+# config.local.toml は gitignore 済み（個人パスをコミットしない）。
+
+[core]
+state_dir = ".toc"        # goal.toml / history.jsonl / レポート出力先
+max_interval_days = 3     # 何も起きなくてもこの日数でレビュー推奨（可変）
+
+# ディレクトリ型パイプライン: ファイルの移動 = 工程の進行
+[[source]]
+type = "dir_pipeline"
+name = "articles"
+stages = [
+  { name = "inbox", path = "content/inbox" },
+  { name = "drafts", path = "content/drafts" },
+  { name = "ready", path = "content/ready" },
+  { name = "published", path = "published", terminal = true },
+]
+
+# Markdown タスクリスト: - [ ] が open、- [x] が done
+[[source]]
+type = "md_tasks"
+name = "todo"
+path = "tasks/todo.md"
+
+# JSON 台帳: 成果物の実体が外部 (公開 URL 等) にあり、ローカルには記録しかない場合。
+# 1 レコード = 完了済み成果物 1 件として terminal 工程に載る。
+# 注意: 出力先フォルダを Throughput の代わりに使うと、同期漏れで
+#       「出荷が止まった」ように見える。実際に公開を記録している台帳を指すこと。
+[[source]]
+type = "json_ledger"
+name = "notes"
+path = "data/published_notes.json"
+stage = "published"
+# records_key = "notes"        # 配列が dict の下にある場合だけ指定
+id_field = "note_id"
+title_field = "title"
+timestamp_field = "published_at"
+
+# filter_field / filter_value: 台帳の一部だけが「完了」の場合に絞る。
+# 例: 管理台帳に private / draft も載っているとき、公開済みだけを Throughput に数える。
+# 絞らないと未公開のものまで「世に出した」と計上してしまう。
+# [[source]]
+# type = "json_ledger"
+# name = "repos"
+# path = "config/repositories.json"
+# stage = "published"
+# records_key = "repositories"
+# id_field = "name"
+# title_field = "name"
+# timestamp_field = "verified_at"
+# filter_field = "visibility"
+# filter_value = "public"
